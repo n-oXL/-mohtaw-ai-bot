@@ -5,7 +5,7 @@ import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-# سيرفر وهمي لتلبية شروط رندر وفتح بورت
+# سيرفر وهمي لتلبية شروط رندر وفتح البورت
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -18,14 +18,15 @@ def run_server():
     print(f"[WEB SERVER] Running on port {port}")
     server.serve_forever()
 
+# تشغيل السيرفر في خلفية مستقلة
 threading.Thread(target=run_server, daemon=True).start()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# دالة البداية مع تتبع السجلات
+# دالة البداية
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    print(f"[TELEGRAM] Received /start command from user: {user.first_name} (ID: {user.id})")
+    print(f"[TELEGRAM] Received /start from user: {user.first_name} (ID: {user.id})")
     
     keyboard = [
         [
@@ -97,24 +98,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif choice == "lang_en":
         await query.edit_message_text("✅ تم اختيار: الترجمة إلى الإنجليزية.\n⏳ جاري بدء المعالجة والترجمة...")
 
-async def main():
+def main():
     if not TOKEN:
         print("[ERROR] TELEGRAM_BOT_TOKEN is missing!")
         return
 
+    # بناء التطبيق بالطريقة القياسية الصحيحة
     app = ApplicationBuilder().token(TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("[TELEGRAM] Bot polling is starting...")
-    await app.initialize()
-    await app.start()
-    app.updater.start_polling()
-
-    stop_event = asyncio.Event()
-    await stop_event.wait()
+    print("[TELEGRAM] Bot is starting polling...")
+    # تشغيل الـ Polling مباشرة بشكل متكامل وآمن
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
