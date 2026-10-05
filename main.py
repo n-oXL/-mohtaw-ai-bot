@@ -2,8 +2,8 @@ import os
 import asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # سيرفر وهمي لتلبية شروط رندر وفتح بورت
 class SimpleHandler(BaseHTTPRequestHandler):
@@ -21,25 +21,79 @@ threading.Thread(target=run_server, daemon=True).start()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+# دالة البداية مع أزرار اختيار لغة الدردشة
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("أهلاً بك يا فنان! أرسل لي أي مقطع فيديو أو حلقة، وبجهزها لك للترجمة 🎬🚀")
+    keyboard = [
+        [
+            InlineKeyboardButton("🇸🇦 العربية", callback_data="ui_ar"),
+            InlineKeyboardButton("🇬🇧 English", callback_data="ui_en")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "أهلاً بك في بوت مُترجمي 🎬🚀\n"
+        "Welcome to My Translator Bot!\n\n"
+        "الرجاء اختيار لغة العرض المفضلة لديك:\n"
+        "Please choose your preferred language:",
+        reply_markup=reply_markup
+    )
 
-# دالة استقبال الفيديوهات
+# دالة استقبال الفيديوهات وعرض قائمة خيارات الترجمة
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video = update.message.video or update.message.document
     if not video:
         return
 
-    await update.message.reply_text("📥 جاري استقبال الفيديو وتحميله للمعالجة...")
+    keyboard = [
+        [
+            InlineKeyboardButton("🇸🇦 العربية (فصحى)", callback_data="lang_ar_formal"),
+            InlineKeyboardButton("😎 العربية (عامية)", callback_data="lang_ar_slang")
+        ],
+        [
+            InlineKeyboardButton("🇬🇧 الإنجليزية (English)", callback_data="lang_en"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # تحميل الملف المؤقت في السيرفر
-    file = await context.bot.get_file(video.file_id)
-    downloaded_file_path = "downloaded_video.mp4"
-    await file.download_to_drive(downloaded_file_path)
+    await update.message.reply_text(
+        "📥 تم استلام الفيديو بنجاح!\nاختر لغة الترجمة المستهدفة:",
+        reply_markup=reply_markup
+    )
+
+# دالة التعامل مع جميع الأزرار التفاعلية
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
     
-    await update.message.reply_text("✅ تم استلام الفيديو بنجاح! جاري التجهيز للترجمة...")
+    choice = query.data
     
-    # هنا لاحقاً بنضيف كود التفريغ والترجمة والدمج
+    # تفاعلات اختيار لغة الواجهة عند البدء مع شروط المقاطع
+    if choice == "ui_ar":
+        await query.edit_message_text(
+            "✅ تم اختيار اللغة العربية.\n\n"
+            "🎬 **أرسل لي المقطع الآن وفقاً للشروط التالية لضمان نجاح المعالجة:**\n"
+            "• **الصيغ المدعومة:** MP4, MOV, MKV\n"
+            "• **المدة المقبولة:** أقصى مدة يفضل أن تكون ضمن المعقول (أقل من 15-20 دقيقة للحلقة)\n"
+            "• **الحجم الأقصى:** يفضل ألا يتجاوز حجم الملف الحدود المسموحة لضمان السرعة وعدم توقف السيرفر.\n\n"
+            "بانتظار مقطعك يا فنان!"
+        )
+    elif choice == "ui_en":
+        await query.edit_message_text(
+            "✅ English has been selected.\n\n"
+            "🎬 **Please send your video clip according to the following guidelines:**\n"
+            "• **Supported Formats:** MP4, MOV, MKV\n"
+            "• **Duration:** Best kept under reasonable limits (e.g., under 15-20 mins per episode)\n"
+            "• **Max Size:** Keep file size reasonable to avoid server timeouts.\n\n"
+            "Waiting for your clip!"
+        )
+    
+    # تفاعلات اختيار لغة الترجمة للفيديو
+    elif choice == "lang_ar_formal":
+        await query.edit_message_text("✅ تم اختيار: الترجمة إلى العربية (فصحى).\n⏳ جاري بدء المعالجة والترجمة...")
+    elif choice == "lang_ar_slang":
+        await query.edit_message_text("✅ تم اختيار: الترجمة إلى العربية (عامية).\n⏳ جاري بدء المعالجة والترجمة...")
+    elif choice == "lang_en":
+        await query.edit_message_text("✅ تم اختيار: الترجمة إلى الإنجليزية.\n⏳ جاري بدء المعالجة والترجمة...")
 
 async def main():
     if not TOKEN:
@@ -49,10 +103,10 @@ async def main():
     app = ApplicationBuilder().token(TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
-    # استقبال أي فيديو أو ملف مرسل
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
+    app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("البوت يعمل الآن ومستعد لاستقبال الفيديوهات...")
+    print("البوت يعمل الآن...")
     await app.initialize()
     await app.start()
     app.updater.start_polling()
