@@ -50,23 +50,26 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     print(f"[TELEGRAM] Received video file from user: {update.effective_user.id}")
 
+    # تخزين معرف الملف مؤخراً في السياق لو احتجناه لاحقاً بالمعالجة
+    context.user_data['video_file_id'] = video.file_id
+
     keyboard = [
         [
-            InlineKeyboardButton("🇸🇦 العربية (فصحى)", callback_data="lang_ar_formal"),
-            InlineKeyboardButton("😎 العربية (عامية)", callback_data="lang_ar_slang")
+            InlineKeyboardButton("📝 ترجمة (فصحى)", callback_data="mode_sub_formal"),
+            InlineKeyboardButton("😎 ترجمة (عامية)", callback_data="mode_sub_slang")
         ],
         [
-            InlineKeyboardButton("🇬🇧 الإنجليزية (English)", callback_data="lang_en"),
+            InlineKeyboardButton("🎙️ دبلجة صوتية كاملة", callback_data="mode_dubbing")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "📥 تم استلام الفيديو بنجاح!\nاختر لغة الترجمة المستهدفة:",
+        "📥 تم استلام الفيديو بنجاح!\nاختر وضع المعالجة المطلوب (ترجمة أو دبلجة):",
         reply_markup=reply_markup
     )
 
-# دالة التعامل مع الأزرار
+# دالة التعامل مع الأزرار وحذف الرسائل القديمة لتنظيف الشاشة
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -74,29 +77,39 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"[TELEGRAM] Button clicked: {choice}")
     
     if choice == "ui_ar":
+        # تعديل رسالة اختيار لغة الواجهة ومسح الأزرار
         await query.edit_message_text(
             "✅ تم اختيار اللغة العربية.\n\n"
-            "🎬 **أرسل لي المقطع الآن وفقاً للشروط التالية لضمان نجاح المعالجة:**\n"
-            "• **الصيغ المدعومة:** MP4, MOV, MKV\n"
-            "• **المدة المقبولة:** أقصى مدة يفضل أن تكون ضمن المعقول (أقل من 15-20 دقيقة للحلقة)\n"
-            "• **الحجم الأقصى:** يفضل ألا يتجاوز حجم الملف الحدود المسموحة للسرعة.\n\n"
+            "🎬 **أرسل لي المقطع الآن وفقاً للشروط التالية:**\n"
+            "• **الصيغ:** MP4, MOV, MKV\n"
+            "• **المدة:** يفضل أقل من 15-20 دقيقة للحلقة\n\n"
             "بانتظار مقطعك يا فنان!"
         )
     elif choice == "ui_en":
         await query.edit_message_text(
             "✅ English has been selected.\n\n"
-            "🎬 **Please send your video clip according to the following guidelines:**\n"
-            "• **Supported Formats:** MP4, MOV, MKV\n"
-            "• **Duration:** Best kept under reasonable limits.\n"
-            "• **Max Size:** Keep file size reasonable.\n\n"
+            "🎬 **Please send your video clip:**\n"
+            "• **Formats:** MP4, MOV, MKV\n\n"
             "Waiting for your clip!"
         )
-    elif choice == "lang_ar_formal":
-        await query.edit_message_text("✅ تم اختيار: الترجمة إلى العربية (فصحى).\n⏳ جاري بدء المعالجة والترجمة...")
-    elif choice == "lang_ar_slang":
-        await query.edit_message_text("✅ تم اختيار: الترجمة إلى العربية (عامية).\n⏳ جاري بدء المعالجة والترجمة...")
-    elif choice == "lang_en":
-        await query.edit_message_text("✅ تم اختيار: الترجمة إلى الإنجليزية.\n⏳ جاري بدء المعالجة والترجمة...")
+    
+    # إذا اختار وضع الترجمة أو الدبلجة، نحذف الرسالة السريعة ونعطيه رسالة البدء بالعمليات الفورية
+    elif choice in ["mode_sub_formal", "mode_sub_slang", "mode_dubbing"]:
+        mode_text = {
+            "mode_sub_formal": "الترجمة إلى العربية (فصحى)",
+            "mode_sub_slang": "الترجمة إلى العربية (عامية)",
+            "mode_dubbing": "الدبلجة الصوتية الكاملة"
+        }[choice]
+
+        # تحديث الرسالة الحالية لإزالة الأزرار وعرض حالة البدء
+        await query.edit_message_text(
+            f"✅ تم اختيار الوضع: **{mode_text}**\n\n"
+            "⏳ جاري الآن تحميل الفيديو ومعالجته عبر محرك الصوت والذكاء الاصطناعي...\n"
+            "يرجى الانتظار قليلاً ريثما يتم إرسال النتيجة النهائية."
+        )
+        
+        # هنا سيتم لاحقاً دمج دوال FFmpeg واستخراج الصوت ومعالجته بالـ AI
+        # async process_media_pipeline(update, context, choice)
 
 async def main():
     if not TOKEN:
@@ -114,9 +127,8 @@ async def main():
     await app.start()
     await app.updater.start_polling()
 
-    # الحفاظ على تشغيل السيرفر والبوت للأبد
     stop_event = asyncio.Event()
     await stop_event.wait()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
