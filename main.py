@@ -1,5 +1,5 @@
 import os
-import requests
+import asyncio
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
@@ -13,11 +13,9 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("الرجاء إرسال فيديو صحيح.")
         return
 
-    await message.reply_text("📥 تم استلام الفيديو، جارٍ تجهيزه للخدمة...")
-    # هنا تم تبسيط الكود لضمان عدم توقف السيرفر المجاني على Render، وقريباً نربطه بخدمة ترجمة خارجية سريعة.
-    await message.reply_text("✨ البوت يعمل الآن بشكل مستقر وجاهز للتطوير وإضافة الترجمة خطوة بخطوة بدون أي أخطاء بناء!")
+    await message.reply_text("📥 تم استلام الفيديو بنجاح، البوت يعمل الآن بشكل مستقر وممتاز!")
 
-def main():
+async def main():
     if not TOKEN:
         print("❌ خطأ: لم يتم العثور على TELEGRAM_BOT_TOKEN")
         return
@@ -25,8 +23,14 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
 
-    print("🤖 البوت يعمل الآن بنجاح ومستقر تماماً...")
-    app.run_polling()
+    print("🤖 البوت يعمل الآن ويستمع للفيديوهات...")
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    
+    # يبقي البوت شغّالاً
+    stop_event = asyncio.Event()
+    await stop_event.wait()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
