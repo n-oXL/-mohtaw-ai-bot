@@ -10,19 +10,23 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is running!")
+        self.wfile.write(b"Bot is running successfully!")
 
 def run_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    print(f"[WEB SERVER] Running on port {port}")
     server.serve_forever()
 
 threading.Thread(target=run_server, daemon=True).start()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# دالة البداية مع أزرار اختيار لغة الدردشة
+# دالة البداية مع تتبع السجلات
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    print(f"[TELEGRAM] Received /start command from user: {user.first_name} (ID: {user.id})")
+    
     keyboard = [
         [
             InlineKeyboardButton("🇸🇦 العربية", callback_data="ui_ar"),
@@ -38,11 +42,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# دالة استقبال الفيديوهات وعرض قائمة خيارات الترجمة
+# دالة استقبال الفيديوهات
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video = update.message.video or update.message.document
     if not video:
         return
+    print(f"[TELEGRAM] Received video file from user: {update.effective_user.id}")
 
     keyboard = [
         [
@@ -60,21 +65,20 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# دالة التعامل مع جميع الأزرار التفاعلية
+# دالة التعامل مع الأزرار
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     choice = query.data
+    print(f"[TELEGRAM] Button clicked: {choice}")
     
-    # تفاعلات اختيار لغة الواجهة عند البدء مع شروط المقاطع
     if choice == "ui_ar":
         await query.edit_message_text(
             "✅ تم اختيار اللغة العربية.\n\n"
             "🎬 **أرسل لي المقطع الآن وفقاً للشروط التالية لضمان نجاح المعالجة:**\n"
             "• **الصيغ المدعومة:** MP4, MOV, MKV\n"
             "• **المدة المقبولة:** أقصى مدة يفضل أن تكون ضمن المعقول (أقل من 15-20 دقيقة للحلقة)\n"
-            "• **الحجم الأقصى:** يفضل ألا يتجاوز حجم الملف الحدود المسموحة لضمان السرعة وعدم توقف السيرفر.\n\n"
+            "• **الحجم الأقصى:** يفضل ألا يتجاوز حجم الملف الحدود المسموحة للسرعة.\n\n"
             "بانتظار مقطعك يا فنان!"
         )
     elif choice == "ui_en":
@@ -82,12 +86,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅ English has been selected.\n\n"
             "🎬 **Please send your video clip according to the following guidelines:**\n"
             "• **Supported Formats:** MP4, MOV, MKV\n"
-            "• **Duration:** Best kept under reasonable limits (e.g., under 15-20 mins per episode)\n"
-            "• **Max Size:** Keep file size reasonable to avoid server timeouts.\n\n"
+            "• **Duration:** Best kept under reasonable limits.\n"
+            "• **Max Size:** Keep file size reasonable.\n\n"
             "Waiting for your clip!"
         )
-    
-    # تفاعلات اختيار لغة الترجمة للفيديو
     elif choice == "lang_ar_formal":
         await query.edit_message_text("✅ تم اختيار: الترجمة إلى العربية (فصحى).\n⏳ جاري بدء المعالجة والترجمة...")
     elif choice == "lang_ar_slang":
@@ -97,7 +99,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def main():
     if not TOKEN:
-        print("خطأ: لم يتم العثور على التوكن")
+        print("[ERROR] TELEGRAM_BOT_TOKEN is missing!")
         return
 
     app = ApplicationBuilder().token(TOKEN).build()
@@ -106,7 +108,7 @@ async def main():
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("البوت يعمل الآن...")
+    print("[TELEGRAM] Bot polling is starting...")
     await app.initialize()
     await app.start()
     app.updater.start_polling()
