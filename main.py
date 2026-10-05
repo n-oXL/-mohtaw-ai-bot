@@ -4,9 +4,9 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-import subprocess
+from openai import OpenAI
 
-# سيرفر وهمي لتلبية شروط رندر وفتح البورت
+# إعداد السيرفر المحلي لضمان استقرار البوت على الاستضافات
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -16,12 +16,14 @@ class SimpleHandler(BaseHTTPRequestHandler):
 def run_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), SimpleHandler)
-    print(f"[WEB SERVER] Running on port {port}")
     server.serve_forever()
 
 threading.Thread(target=run_server, daemon=True).start()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -32,9 +34,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "أهلاً بك في بوت مُترجمي السينمائي 🎬🚀\n"
-        "Welcome to My Subtitle Bot!\n\n"
-        "الرجاء اختيار لغة العرض المفضلة لديك:",
+        "أهلاً بك في بوت مُترجمي السينمائي 🎬🚀\nالرجاء اختيار لغة العرض المفضلة لديك:",
         reply_markup=reply_markup
     )
 
@@ -45,15 +45,6 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data['video_obj'] = video
 
-    if 'instruction_message_id' in context.user_data:
-        try:
-            await context.bot.delete_message(
-                chat_id=update.effective_chat.id,
-                message_id=context.user_data['instruction_message_id']
-            )
-        except Exception:
-            pass
-
     keyboard = [
         [
             InlineKeyboardButton("📝 ترجمة أفلام (فصحى)", callback_data="mode_sub_formal"),
@@ -63,7 +54,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "📥 تم استلام الفيديو بنجاح!\nاختر نمط الترجمة السينمائية المطلوب:",
+        "📥 تم استلام الفيديو بنجاح!\nاختر نمط الترجمة المطلوب:",
         reply_markup=reply_markup
     )
 
@@ -71,30 +62,58 @@ async def process_and_send_subtitle(update: Update, context: ContextTypes.DEFAUL
     query = update.callback_query
     chat_id = update.effective_chat.id
     
+    input_path = "input_video.mp4"
+    audio_path = "extracted_audio.mp3"
+    output_path = "output_video.mp4"
+    
     try:
         video_obj = context.user_data.get('video_obj')
         if not video_obj:
-            await query.edit_message_text("❌ عذراً، لم أتمكن من العثور على الفيديو. أرسله مرة أخرى.")
+            await query.edit_message_text("❌ عذراً، لم أتمكن من العثور على الفيديو.")
             return
 
         file = await context.bot.get_file(video_obj.file_id)
-        input_path = "input_video.mp4"
-        output_path = "output_video.mp4"
-        
         await query.edit_message_text(action_msg)
         
         # 1. تحميل الفيديو الأصلي
         await file.download_to_drive(input_path)
 
-        # 2. استخراج وفحص مدة الفيديو الحقيقية للتأكد من مطابقتها بالكامل
-        # هنا يتم معالجة الفيديو مع الحفاظ على مسار الصوت الأصلي كاملاً بدون أي تقصير
-        sub_text = "ترجمة احترافية للمقطع السينمائي"
-        if "عامية" in mode:
-            sub_text = "ترجمة عامية للمقطع..."
+        # 2. استخراج الصوت من الفيديو باستخدام FFmpeg
+        extract_process = await asyncio.create_subprocess_exec(
+            'ffmpeg', '-y', '-i', input_path, '-vn', '-acodec', 'libmp3lame', '-q:a', '4', audio_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await extract_process.communicate()
 
-        # فلتر لعرض الترجمة بشكل متناسق مع الحفاظ على مسار الفيديو والصوت بالكامل
-        vf_filter = f"drawtext=text='{sub_text}':fontcolor=white:fontsize=22:box=1:boxcolor=black@0.6:boxborderw=5:x=(w-text_w)/2:y=h-th-40"
+        # 3. إرسال الصوت لـ OpenAI Whisper API حصرياً
+        transcribed_text = ""
+        if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+            with open(audio_path, "rb") as audio_file:
+                prompt_instruction = "Translate and transcribe accurately into cinematic Arabic subtitles." if mode == "فصحى" else "Translate accurately into casual cinematic Arabic slang."
+                
+                try:
+                    transcript = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                        prompt=prompt_instruction
+                    )
+                    transcribed_text = transcript.text
+                except Exception as api_err:
+                    print(f"[OPENAI API ERROR]: {api_err}")
+                    transcribed_text = f"خطأ API: {str(api_err)}"
 
+        if not transcribed_text:
+            transcribed_text = "لم يتم رصد صوت واضح في المقطع"
+
+        # اختصار النص لو كان طويلاً جداً
+        if len(transcribed_text) > 80:
+            transcribed_text = transcribed_text[:77] + "..."
+
+        # تجهيز فلتر الرسم باللون الأبيض والخلفية السوداء
+        vf_filter = f"drawtext=text='{transcribed_text}':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.7:boxborderw=6:x=(w-text_w)/2:y=h-th-50"
+
+        # 4. دمج الترجمة الحقيقية بالفيديو
         process = await asyncio.create_subprocess_exec(
             'ffmpeg', '-y', '-i', input_path, 
             '-vf', vf_filter, 
@@ -109,23 +128,23 @@ async def process_and_send_subtitle(update: Update, context: ContextTypes.DEFAUL
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
             output_path = input_path
 
-        # 3. إرسال الفيديو كاملاً للمستخدم بنفس مدته الأصلية
+        # 5. إرسال الفيديو للمستخدم
         with open(output_path, 'rb') as video_file:
             await context.bot.send_video(
                 chat_id=chat_id,
                 video=video_file,
-                caption=f"✨ تم الانتهاء بنجاح! النمط: {mode}"
+                caption=f"✨ تمت المعالجة عبر Whisper ({mode})"
             )
-
-        # تنظيف الملفات المؤقتة
-        for p in [input_path, output_path]:
-            if os.path.exists(p) and p != output_path:
-                try: os.remove(p)
-                except: pass
 
     except Exception as e:
         print(f"[ERROR] {e}")
-        await query.edit_message_text("❌ حدث خطأ أثناء معالجة المقطع السينمائي.")
+        await query.edit_message_text(f"❌ حدث خطأ أثناء المعالجة: {str(e)}")
+
+    finally:
+        for p in [input_path, audio_path, output_path]:
+            if os.path.exists(p) and p != output_path:
+                try: os.remove(p)
+                except: pass
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -133,15 +152,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     choice = query.data
     
     if choice == "ui_ar":
-        msg = await query.edit_message_text("✅ تم اختيار العربية. أرسل مقطع الفيديو الآن:")
-        context.user_data['instruction_message_id'] = msg.message_id
+        await query.edit_message_text("✅ تم اختيار العربية. أرسل مقطع الفيديو الآن:")
     elif choice == "ui_en":
-        msg = await query.edit_message_text("✅ English selected. Send your video clip now:")
-        context.user_data['instruction_message_id'] = msg.message_id
+        await query.edit_message_text("✅ English selected. Send your video clip now:")
     elif choice in ["mode_sub_formal", "mode_sub_slang"]:
         mode_names = {
-            "mode_sub_formal": ("الترجمة السينمائية (فصحى)", "📝 جاري معالجة الفيديو بالكامل (فصحى)..."),
-            "mode_sub_slang": ("الترجمة السينمائية (عامية)", "😎 جاري معالجة الفيديو بالكامل (عامية)...")
+            "mode_sub_formal": ("فصحى", "🎙️ جاري استخراج الصوت وتفريغه عبر Whisper (فصحى)..."),
+            "mode_sub_slang": ("عامية", "🎙️ جاري استخراج الصوت وتفريغه عبر Whisper (عامية)...")
         }
         mode_text, action_msg = mode_names[choice]
         asyncio.create_task(process_and_send_subtitle(update, context, mode_text, action_msg))
