@@ -3,7 +3,7 @@ import asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # سيرفر وهمي لتلبية شروط رندر وفتح بورت
 class SimpleHandler(BaseHTTPRequestHandler):
@@ -17,13 +17,29 @@ def run_server():
     server = HTTPServer(('0.0.0.0', port), SimpleHandler)
     server.serve_forever()
 
-# تشغيل السيرفر الوهمي في الخلفية
 threading.Thread(target=run_server, daemon=True).start()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-async def start(update: Update, context):
-    await update.message.reply_text("شغال البوت معاك زي الحلاوة 🚀")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("أهلاً بك يا فنان! أرسل لي أي مقطع فيديو أو حلقة، وبجهزها لك للترجمة 🎬🚀")
+
+# دالة استقبال الفيديوهات
+async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    video = update.message.video or update.message.document
+    if not video:
+        return
+
+    await update.message.reply_text("📥 جاري استقبال الفيديو وتحميله للمعالجة...")
+    
+    # تحميل الملف المؤقت في السيرفر
+    file = await context.bot.get_file(video.file_id)
+    downloaded_file_path = "downloaded_video.mp4"
+    await file.download_to_drive(downloaded_file_path)
+    
+    await update.message.reply_text("✅ تم استلام الفيديو بنجاح! جاري التجهيز للترجمة...")
+    
+    # هنا لاحقاً بنضيف كود التفريغ والترجمة والدمج
 
 async def main():
     if not TOKEN:
@@ -31,12 +47,15 @@ async def main():
         return
 
     app = ApplicationBuilder().token(TOKEN).build()
+    
     app.add_handler(CommandHandler("start", start))
+    # استقبال أي فيديو أو ملف مرسل
+    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
 
-    print("البوت يعمل الآن...")
+    print("البوت يعمل الآن ومستعد لاستقبال الفيديوهات...")
     await app.initialize()
     await app.start()
-    await app.updater.start_polling()
+    app.updater.start_polling()
 
     stop_event = asyncio.Event()
     await stop_event.wait()
