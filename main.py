@@ -18,7 +18,7 @@ def run_server():
     print(f"[WEB SERVER] Running on port {port}")
     server.serve_forever()
 
-# تشغيل السيرفر في خلفية مستقلة
+# تشغيل السيرفر في الخلفية
 threading.Thread(target=run_server, daemon=True).start()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -98,12 +98,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif choice == "lang_en":
         await query.edit_message_text("✅ تم اختيار: الترجمة إلى الإنجليزية.\n⏳ جاري بدء المعالجة والترجمة...")
 
-def main():
+async def main():
     if not TOKEN:
         print("[ERROR] TELEGRAM_BOT_TOKEN is missing!")
         return
 
-    # بناء التطبيق بالطريقة القياسية الصحيحة
     app = ApplicationBuilder().token(TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
@@ -111,8 +110,13 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
 
     print("[TELEGRAM] Bot is starting polling...")
-    # تشغيل الـ Polling مباشرة بشكل متكامل وآمن
-    app.run_polling()
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+
+    # الحفاظ على تشغيل السيرفر والبوت للأبد
+    stop_event = asyncio.Event()
+    await stop_event.wait()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
