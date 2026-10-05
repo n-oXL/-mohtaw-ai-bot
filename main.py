@@ -1,194 +1,83 @@
 import os
-import asyncio
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+import subprocess
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+# استيراد المكتبات الخاصة بالذكاء الاصطناعي للدبلجة والترجمة
+import whisper
+from gtts import gTTS
 
-# سيرفر وهمي لتلبية شروط رندر وفتح البورت
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is running successfully!")
+# تحميل نموذج Whisper للتعرف على الكلام وتفريغه
+whisper_model = whisper.load_model("base")
 
-def run_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
-    print(f"[WEB SERVER] Running on port {port}")
-    server.serve_forever()
-
-# تشغيل السيرفر في الخلفية
-threading.Thread(target=run_server, daemon=True).start()
-
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-# دالة البداية
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    print(f"[TELEGRAM] Received /start from user: {user.first_name} (ID: {user.id})")
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("🇸🇦 العربية", callback_data="ui_ar"),
-            InlineKeyboardButton("🇬🇧 English", callback_data="ui_en")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "أهلاً بك في بوت مُترجمي 🎬🚀\n"
-        "Welcome to My Translator Bot!\n\n"
-        "الرجاء اختيار لغة العرض المفضلة لديك:\n"
-        "Please choose your preferred language:",
-        reply_markup=reply_markup
-    )
-
-# دالة استقبال الفيديوهات وتخزينها مع رفع حد الـ file_size
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    video = update.message.video or update.message.document
+    # التأكد من إرسال مقطع فيديو
+    video = update.message.video or update.message.effective_attachment
     if not video:
         return
-    print(f"[TELEGRAM] Received video file from user: {update.effective_user.id}")
 
-    context.user_data['video_obj'] = video
+    await update.message.reply_text("⏳ جاري تحميل الفيديو ومعالجة الصوت بالذكاء الاصطناعي...")
 
-    # حذف رسالة الإرشادات السابقة لتنظيف الشات
-    if 'instruction_message_id' in context.user_data:
-        try:
-            await context.bot.delete_message(
-                chat_id=update.effective_chat.id,
-                message_id=context.user_data['instruction_message_id']
-            )
-        except Exception as e:
-            print(f"[NOTE] Could not delete old instruction message: {e}")
+    # 1. تحميل الفيديو المؤقت
+    file = await context.bot.get_file(video.file_id)
+    input_path = "input_video.mp4"
+    output_audio = "extracted_audio.mp3"
+    translated_audio = "translated_audio.mp3"
+    final_output = "final_output.mp4"
 
-    keyboard = [
-        [
-            InlineKeyboardButton("📝 ترجمة (فصحى)", callback_data="mode_sub_formal"),
-            InlineKeyboardButton("😎 ترجمة (عامية)", callback_data="mode_sub_slang")
-        ],
-        [
-            InlineKeyboardButton("🎙️ دبلجة صوتية كاملة", callback_data="mode_dubbing")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "📥 تم استلام الفيديو بنجاح!\nاختر وضع المعالجة المطلوب (ترجمة أو دبلجة):",
-        reply_markup=reply_markup
-    )
+    await file.download_to_drive(input_path)
 
-# دالة تنفيذ معالجة الفيديو الفعلية وتحميله وإرساله
-async def process_and_send_video(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str, action_msg: str):
-    query = update.callback_query
-    chat_id = update.effective_chat.id
-    
     try:
-        video_obj = context.user_data.get('video_obj')
-        if not video_obj:
-            await query.edit_message_text("❌ عذراً، لم أتمكن من العثور على الفيديو. الرجاء إرساله مرة أخرى.")
-            return
-
-        # فحص حجم الملف (لو أكبر من 50 ميجابايت ننبه المستخدم مباشرة)
-        file_size = getattr(video_obj, 'file_size', 0)
-        if file_size and file_size > 50 * 1024 * 1024:
-            await query.edit_message_text("❌ عذراً، حجم الفيديو كبير جداً (أكبر من 50 ميجابايت). يرجى إرسال مقطع أقصر أو أقل دقة لتجنب حدود تيليجرام.")
-            return
-
-        file = await context.bot.get_file(video_obj.file_id)
-        input_path = "input_video.mp4"
-        output_path = "output_video.mp4"
-        
-        await query.edit_message_text(action_msg)
-        await file.download_to_drive(input_path)
-        
-        process = await asyncio.create_subprocess_exec(
-            'ffmpeg', '-i', input_path, '-y', output_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+        # 2. استخراج الصوت من الفيديو باستخدام FFmpeg
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", input_path, "-q:a", "0", "-map", "a", output_audio],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
         )
-        await process.communicate()
 
-        if not os.path.exists(output_path):
-            output_path = input_path
+        # 3. تفريغ الصوت (Speech-to-Text) باستخدام Whisper
+        await update.message.reply_text("🎙️ يتم تفريغ وتدقيق النصوص...")
+        result = whisper_model.transcribe(output_audio, task="translate") # task="translate" تترجمه للإنجليزية أو يمكنك ضبطه للعربية مباشرة
+        text_content = result.get("text", "")
 
-        # فحص حجم الملف الناتج قبل إرساله
-        output_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
-        if output_size > 50 * 1024 * 1024:
-            await query.edit_message_text("❌ الملف الناتج أكبر من الحد المسموح للإرسال عبر البوت.")
-            return
+        # 4. تحويل النص المترجم إلى صوت عربي (Text-to-Speech)
+        await update.message.reply_text("🔊 جاري توليد الصوت المدبلج...")
+        tts = gTTS(text=text_content, lang='ar', slow=False)
+        tts.save(translated_audio)
 
-        with open(output_path, 'rb') as video_file:
-            await context.bot.send_video(
-                chat_id=chat_id,
-                video=video_file,
-                caption=f"✅ تم الانتهاء بنجاح! الوضع المختار: {mode}"
-            )
+        # 5. دمج الصوت العربي الجديد مع الفيديو الأصلي وحذف الصوت القديم
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", input_path, "-i", translated_audio,
+                "-c:v", "copy", "-map", "0:v:0", "-map", "1:a:0",
+                "-shortest", final_output
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
 
-        if os.path.exists(input_path): os.remove(input_path)
-        if os.path.exists(output_path) and output_path != input_path: os.remove(output_path)
+        # 6. إرسال الفيديو النهائي المدبلج للمستخدم
+        await update.message.reply_video(video=open(final_output, 'rb'), caption="✨ تم دبلجة المقطع بنجاح!")
 
     except Exception as e:
-        print(f"[ERROR] Processing failed: {e}")
-        await query.edit_message_text(f"❌ حدث خطأ أثناء المعالجة: حجم الملف قد يكون كبير جداً على تيليجرام.")
+        await update.message.reply_text(f"❌ حدث خطأ أثناء المعالجة التقنية: {str(e)}")
 
-# دالة التعامل مع الأزرار
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    choice = query.data
-    
-    if choice == "ui_ar":
-        msg = await query.edit_message_text(
-            "✅ تم اختيار اللغة العربية.\n\n"
-            "🎬 أرسل لي المقطع الآن وفقاً للشروط التالية:\n"
-            "• الصيغ: MP4, MOV, MKV\n"
-            "• المدة: يفضل أقل من 15-20 دقيقة للحلقة\n\n"
-            "بانتظار مقطعك يا فنان!"
-        )
-        context.user_data['instruction_message_id'] = msg.message_id
-        
-    elif choice == "ui_en":
-        msg = await query.edit_message_text(
-            "✅ English has been selected.\n\n"
-            "🎬 Please send your video clip:\n"
-            "• Formats: MP4, MOV, MKV\n\n"
-            "Waiting for your clip!"
-        )
-        context.user_data['instruction_message_id'] = msg.message_id
-        
-    elif choice in ["mode_sub_formal", "mode_sub_slang", "mode_dubbing"]:
-        if choice == "mode_dubbing":
-            mode_text = "الدبلجة الصوتية الكاملة"
-            action_msg = "🎙️ جاري دبلجة مقطعك..."
-        elif choice == "mode_sub_formal":
-            mode_text = "الترجمة إلى العربية (فصحى)"
-            action_msg = "📝 جاري ترجمة مقطعك..."
-        else:
-            mode_text = "الترجمة إلى العربية (عامية)"
-            action_msg = "😎 جاري ترجمة مقطعك..."
+    finally:
+        # تنظيف الملفات المؤقتة من السيرفر
+        for f in [input_path, output_audio, translated_audio, final_output]:
+            if os.path.exists(f):
+                os.remove(f)
 
-        asyncio.create_task(process_and_send_video(update, context, mode_text, action_msg))
+def main():
+    # ضع توكن البوت الخاص بك هنا
+    TOKEN = "YOUR_BOT_TOKEN_HERE"
+    app = ApplicationBuilder().token(TOKEN).build()
 
-async def main():
-    if not TOKEN:
-        print("[ERROR] TELEGRAM_BOT_TOKEN is missing!")
-        return
-
-    # رفع حد استقبال البيانات ليتوافق مع الملفات الكبيرة
-    app = ApplicationBuilder().token(TOKEN).read_timeout(30).write_timeout(30).build()
-    
-    app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
-    app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("[TELEGRAM] Bot is starting polling...")
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-
-    stop_event = asyncio.Event()
-    await stop_event.wait()
+    print("🤖 البوت يعمل الآن وجاهز لدبلجة الفيديوهات بالذكاء الاصطناعي...")
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
