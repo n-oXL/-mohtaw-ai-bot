@@ -50,7 +50,6 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     print(f"[TELEGRAM] Received video file from user: {update.effective_user.id}")
 
-    # تخزين معرف الملف مؤخراً في السياق لو احتجناه لاحقاً بالمعالجة
     context.user_data['video_file_id'] = video.file_id
 
     keyboard = [
@@ -77,7 +76,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"[TELEGRAM] Button clicked: {choice}")
     
     if choice == "ui_ar":
-        # تعديل رسالة اختيار لغة الواجهة ومسح الأزرار
         await query.edit_message_text(
             "✅ تم اختيار اللغة العربية.\n\n"
             "🎬 **أرسل لي المقطع الآن وفقاً للشروط التالية:**\n"
@@ -92,8 +90,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• **Formats:** MP4, MOV, MKV\n\n"
             "Waiting for your clip!"
         )
-    
-    # إذا اختار وضع الترجمة أو الدبلجة، نحذف الرسالة السريعة ونعطيه رسالة البدء بالعمليات الفورية
     elif choice in ["mode_sub_formal", "mode_sub_slang", "mode_dubbing"]:
         mode_text = {
             "mode_sub_formal": "الترجمة إلى العربية (فصحى)",
@@ -101,15 +97,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "mode_dubbing": "الدبلجة الصوتية الكاملة"
         }[choice]
 
-        # تحديث الرسالة الحالية لإزالة الأزرار وعرض حالة البدء
         await query.edit_message_text(
             f"✅ تم اختيار الوضع: **{mode_text}**\n\n"
             "⏳ جاري الآن تحميل الفيديو ومعالجته عبر محرك الصوت والذكاء الاصطناعي...\n"
             "يرجى الانتظار قليلاً ريثما يتم إرسال النتيجة النهائية."
         )
-        
-        # هنا سيتم لاحقاً دمج دوال FFmpeg واستخراج الصوت ومعالجته بالـ AI
-        # async process_media_pipeline(update, context, choice)
 
 async def main():
     if not TOKEN:
@@ -131,4 +123,4 @@ async def main():
     await stop_event.wait()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
