@@ -43,7 +43,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# دالة استقبال الفيديوهات وتخزينها
+# دالة استقبال الفيديوهات وتخزينها مع رفع حد الـ file_size
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video = update.message.video or update.message.document
     if not video:
@@ -89,11 +89,16 @@ async def process_and_send_video(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_text("❌ عذراً، لم أتمكن من العثور على الفيديو. الرجاء إرساله مرة أخرى.")
             return
 
+        # فحص حجم الملف (لو أكبر من 50 ميجابايت ننبه المستخدم مباشرة)
+        file_size = getattr(video_obj, 'file_size', 0)
+        if file_size and file_size > 50 * 1024 * 1024:
+            await query.edit_message_text("❌ عذراً، حجم الفيديو كبير جداً (أكبر من 50 ميجابايت). يرجى إرسال مقطع أقصر أو أقل دقة لتجنب حدود تيليجرام.")
+            return
+
         file = await context.bot.get_file(video_obj.file_id)
         input_path = "input_video.mp4"
         output_path = "output_video.mp4"
         
-        # استخدام النص المختصر بناءً على طلبك
         await query.edit_message_text(action_msg)
         await file.download_to_drive(input_path)
         
@@ -107,6 +112,12 @@ async def process_and_send_video(update: Update, context: ContextTypes.DEFAULT_T
         if not os.path.exists(output_path):
             output_path = input_path
 
+        # فحص حجم الملف الناتج قبل إرساله
+        output_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+        if output_size > 50 * 1024 * 1024:
+            await query.edit_message_text("❌ الملف الناتج أكبر من الحد المسموح للإرسال عبر البوت.")
+            return
+
         with open(output_path, 'rb') as video_file:
             await context.bot.send_video(
                 chat_id=chat_id,
@@ -119,7 +130,7 @@ async def process_and_send_video(update: Update, context: ContextTypes.DEFAULT_T
 
     except Exception as e:
         print(f"[ERROR] Processing failed: {e}")
-        await context.bot.send_message(chat_id=chat_id, text=f"❌ حدث خطأ أثناء المعالجة: {str(e)}")
+        await query.edit_message_text(f"❌ حدث خطأ أثناء المعالجة: حجم الملف قد يكون كبير جداً على تيليجرام.")
 
 # دالة التعامل مع الأزرار
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -164,7 +175,8 @@ async def main():
         print("[ERROR] TELEGRAM_BOT_TOKEN is missing!")
         return
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    # رفع حد استقبال البيانات ليتوافق مع الملفات الكبيرة
+    app = ApplicationBuilder().token(TOKEN).read_timeout(30).write_timeout(30).build()
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
