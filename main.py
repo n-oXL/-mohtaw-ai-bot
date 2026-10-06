@@ -1,6 +1,5 @@
 import os
 import asyncio
-import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -25,19 +24,6 @@ TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-
-# دالة ذكية لتحميل خط Cairo أوتوماتيكياً لو لم يكن موجوداً
-def ensure_font_exists():
-    font_path = "Cairo-Regular.ttf"
-    if not os.path.exists(font_path):
-        print("[INFO] Downloading Cairo font automatically...")
-        try:
-            # رابط مباشر لتحميل خط Cairo بصيغة ttf من مصدر موثوق
-            font_url = "https://github.com/google/fonts/raw/main/ofl/cairo/Cairo-Regular.ttf"
-            urllib.request.urlretrieve(font_url, font_path)
-            print("[INFO] Font downloaded successfully!")
-        except Exception as e:
-            print(f"[WARNING] Could not download font automatically: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -79,10 +65,7 @@ async def process_and_send_subtitle(update: Update, context: ContextTypes.DEFAUL
     input_path = "input_video.mp4"
     audio_path = "extracted_audio.mp3"
     output_path = "output_video.mp4"
-    font_path = "Cairo-Regular.ttf"
-    
-    # التأكد من توفر الخط قبل بدء المعالجة
-    ensure_font_exists()
+    srt_path = "subtitles.srt"
     
     try:
         video_obj = context.user_data.get('video_obj')
@@ -104,7 +87,7 @@ async def process_and_send_subtitle(update: Update, context: ContextTypes.DEFAUL
         )
         await extract_process.communicate()
 
-        # 3. إرسال الصوت لـ OpenAI Whisper API حصرياً
+        # 3. إرسال الصوت لـ OpenAI Whisper API لتفريغه
         transcribed_text = ""
         if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
             with open(audio_path, "rb") as audio_file:
@@ -124,21 +107,32 @@ async def process_and_send_subtitle(update: Update, context: ContextTypes.DEFAUL
         if not transcribed_text:
             transcribed_text = "لم يتم رصد صوت واضح في المقطع"
 
-        # تنظيف النص لمنع أخطاء الـ FFmpeg
-        clean_text = transcribed_text.replace("'", "").replace('"', "").replace("\n", " ")
-        if len(clean_text) > 80:
-            clean_text = clean_text[:77] + "..."
+        # 4. إنشاء ملف ترجمة حقيقي (SRT) يغطي مدة الفيديو بالكامل
+        # نحصل على طول الفيديو الحقيقي لضبط توقيت ظهور الترجمة
+        duration_probe = await asyncio.create_subprocess_exec(
+            'ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', input_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await duration_probe.communicate()
+        try:
+            video_duration = float(stdout.decode().strip())
+        except:
+            video_duration = 10.0  # قيمة افتراضية في حال الفشل
 
-        # تجهيز فلتر الرسم مع استخدام الخط المحمل أوتوماتيكياً
-        if os.path.exists(font_path):
-            vf_filter = f"drawtext=fontfile='{font_path}':text='{clean_text}':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.7:boxborderw=6:x=(w-text_w)/2:y=h-th-50"
-        else:
-            vf_filter = f"drawtext=text='{clean_text}':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.7:boxborderw=6:x=(w-text_w)/2:y=h-th-50"
+        # تنسيق ملف الـ SRT لضمان قراءته بشكل سليم
+        srt_content = f"""1
+00:00:00,000 --> 00:0{int(video_duration//60):02d}:{int(video_duration%60):02d},000
+{transcribed_text}
+"""
+        with open(srt_path, "w", encoding="utf-8") as srt_file:
+            srt_file.write(srt_content)
 
-        # 4. دمج الترجمة بالفيديو
+        # 5. حرق الترجمة عبر فلتر الـ subtitles المخصص لملفات SRT (الخيار الأدق للغة العربية)
+        # استخدام مسار آمن لملف الـ SRT داخل أمر FFmpeg
         process = await asyncio.create_subprocess_exec(
             'ffmpeg', '-y', '-i', input_path, 
-            '-vf', vf_filter, 
+            '-vf', f"subtitles={srt_path}:force_style='FontName=Sans,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,BorderStyle=4,Outline=1,Shadow=1,Alignment=2'", 
             '-c:v', 'libx264', '-preset', 'ultrafast', 
             '-c:a', 'copy', 
             output_path,
@@ -151,12 +145,12 @@ async def process_and_send_subtitle(update: Update, context: ContextTypes.DEFAUL
             output_path = input_path
             print(f"[FFmpeg Error]: {stderr.decode('utf-8', errors='ignore')}")
 
-        # 5. إرسال الفيديو للمستخدم
+        # 6. إرسال الفيديو للمستخدم
         with open(output_path, 'rb') as video_file:
             await context.bot.send_video(
                 chat_id=chat_id,
                 video=video_file,
-                caption=f"✨ تمت المعالجة وحرق الترجمة عبر Whisper ({mode})"
+                caption=f"✨ تمت المعالجة وحرق الترجمة السينمائية ({mode})"
             )
 
     except Exception as e:
@@ -164,7 +158,7 @@ async def process_and_send_subtitle(update: Update, context: ContextTypes.DEFAUL
         await query.edit_message_text(f"❌ حدث خطأ أثناء المعالجة: {str(e)}")
 
     finally:
-        for p in [input_path, audio_path, output_path]:
+        for p in [input_path, audio_path, output_path, srt_path]:
             if os.path.exists(p) and p != output_path:
                 try: os.remove(p)
                 except: pass
@@ -189,9 +183,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def main():
     if not TOKEN:
         return
-    # تحميل الخط عند تشغيل البوت لأول مرة
-    ensure_font_exists()
-    
     app = ApplicationBuilder().token(TOKEN).read_timeout(60).write_timeout(60).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
