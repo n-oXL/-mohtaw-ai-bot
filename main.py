@@ -65,6 +65,7 @@ async def process_and_send_subtitle(update: Update, context: ContextTypes.DEFAUL
     input_path = "input_video.mp4"
     audio_path = "extracted_audio.mp3"
     output_path = "output_video.mp4"
+    font_path = "Cairo-Regular.ttf"
     
     try:
         video_obj = context.user_data.get('video_obj')
@@ -106,14 +107,18 @@ async def process_and_send_subtitle(update: Update, context: ContextTypes.DEFAUL
         if not transcribed_text:
             transcribed_text = "لم يتم رصد صوت واضح في المقطع"
 
-        # اختصار النص لو كان طويلاً جداً
-        if len(transcribed_text) > 80:
-            transcribed_text = transcribed_text[:77] + "..."
+        # تنظيف النص لمنع أخطاء الـ FFmpeg
+        clean_text = transcribed_text.replace("'", "").replace('"', "").replace("\n", " ")
+        if len(clean_text) > 80:
+            clean_text = clean_text[:77] + "..."
 
-        # تجهيز فلتر الرسم باللون الأبيض والخلفية السوداء
-        vf_filter = f"drawtext=text='{transcribed_text}':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.7:boxborderw=6:x=(w-text_w)/2:y=h-th-50"
+        # تجهيز فلتر الرسم مع تحديد مسار الخط العربي لضمان ظهور الحروف بدقة
+        if os.path.exists(font_path):
+            vf_filter = f"drawtext=fontfile='{font_path}':text='{clean_text}':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.7:boxborderw=6:x=(w-text_w)/2:y=h-th-50"
+        else:
+            vf_filter = f"drawtext=text='{clean_text}':fontcolor=white:fontsize=24:box=1:boxcolor=black@0.7:boxborderw=6:x=(w-text_w)/2:y=h-th-50"
 
-        # 4. دمج الترجمة الحقيقية بالفيديو
+        # 4. دمج الترجمة بالفيديو
         process = await asyncio.create_subprocess_exec(
             'ffmpeg', '-y', '-i', input_path, 
             '-vf', vf_filter, 
@@ -123,17 +128,18 @@ async def process_and_send_subtitle(update: Update, context: ContextTypes.DEFAUL
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        await process.communicate()
+        stdout, stderr = await process.communicate()
 
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
             output_path = input_path
+            print(f"[FFmpeg Error]: {stderr.decode('utf-8', errors='ignore')}")
 
         # 5. إرسال الفيديو للمستخدم
         with open(output_path, 'rb') as video_file:
             await context.bot.send_video(
                 chat_id=chat_id,
                 video=video_file,
-                caption=f"✨ تمت المعالجة عبر Whisper ({mode})"
+                caption=f"✨ تمت المعالجة وحرق الترجمة عبر Whisper ({mode})"
             )
 
     except Exception as e:
