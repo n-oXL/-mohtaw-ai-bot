@@ -1,3 +1,4 @@
+import os
 import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
@@ -107,7 +108,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_data["status"] == "trial" and video_duration_minutes > MAX_TRIAL_DURATION:
             await update.message.reply_text(
                 f"⚠️ عذراً، أقصى طول مسموح للمقطع في **التجربة المجانية** هو {MAX_TRIAL_DURATION} دقائق فقط!\n"
-                "لرفع مقاطع طويلة وحلقات مسلسلات، يرجى ترقية حسابك إلى الباقة المدفوعة عبر `/activate`."
+                "لرفع مقاطع طويلة وحلقات مسلسلات، يرجى ترقية حسابك إلى الباقة المدفوعة عبر الأمر `/activate`."
             )
             return
             
@@ -118,7 +119,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    # واجهة الخيارات النظيفة (بدون حشو، معتمدين الفصحى واللغات العالمية)
+    # واجهة الخيارات النظيفة
     prompt_text = "⚙️ كيف ترغب في معالجة هذا الفيديو؟"
     
     options_markup = InlineKeyboardMarkup([
@@ -166,7 +167,7 @@ async def process_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in users_db and users_db[user_id]["status"] == "trial":
         users_db[user_id]["clips_left"] -= 1
 
-    # رسائل النظام النظيفة والمتفق عليها
+    # رسائل النظام النظيفة
     await query.message.edit_text("⏳ جاري الترجمة، الرجاء الانتظار...")
     
     # [هنا يوضع كود ربط الذكاء الاصطناعي والـ API مستقبلاً]
@@ -176,9 +177,12 @@ async def process_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    # استبدل هذا التوكن بتوكن بوتك الفعلي من BotFather
-    TOKEN = "YOUR_BOT_TOKEN_HERE"
+    # سحب التوكن أوتوماتيكياً من متغيرات البيئة في رندر (BOT_TOKEN)
+    TOKEN = os.environ.get("BOT_TOKEN")
     
+    if not TOKEN:
+        raise ValueError("❌ خطأ: لم يتم العثور على متغير البيئة BOT_TOKEN!")
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     # الأوامر الأساسية
