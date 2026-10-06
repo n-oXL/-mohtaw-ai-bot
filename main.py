@@ -1,197 +1,200 @@
-import os
-import asyncio
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from openai import OpenAI
+import logging
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
-# إعداد السيرفر المحلي لضمان استقرار البوت على الاستضافات
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is running successfully!")
+# إعداد السجلات (Logging)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-def run_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
-    server.serve_forever()
+# قاعدة بيانات وهمية مؤقتة (تستبدل لاحقاً بقاعدة بيانات حقيقية مثل SQLite أو PostgreSQL)
+users_db = {}
 
-threading.Thread(target=run_server, daemon=True).start()
+# إعدادات النظام والشروط الصارمة لحماية الـ API والسيرفر
+MAX_TRIAL_CLIPS = 3          # عدد المقاطع التجريبية المجانية لكل مستخدم
+MAX_TRIAL_DURATION = 10      # أقصى حد لطول المقطع المجاني الواحد (10 دقائق) لمنع حرق الـ API بحلقات المسلسلات
+MAX_PAID_DURATION = 60       # أقصى حد لطول المقطع في الباقات المدفوعة (60 دقيقة)
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-client = OpenAI(api_key=OPENAI_API_KEY)
-
+# 1. أمر البداية /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [
-            InlineKeyboardButton("🇸🇦 العربية", callback_data="ui_ar"),
-            InlineKeyboardButton("🇬🇧 English", callback_data="ui_en")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "أهلاً بك في بوت مُترجمي السينمائي 🎬🚀\nالرجاء اختيار لغة العرض المفضلة لديك:",
-        reply_markup=reply_markup
+    user = update.effective_user
+    user_id = user.id
+
+    # منح باقة التجربة المجانية للمستخدم الجديد (مربوطة بالـ Telegram ID وبعدد المقاطع)
+    if user_id not in users_db:
+        users_db[user_id] = {
+            "status": "trial",
+            "clips_left": MAX_TRIAL_CLIPS,
+            "tier": "التجربة المجانية"
+        }
+
+    welcome_text = (
+        f"👋 أهلاً بك يا غالي!\n\n"
+        "أنا بوت ترجمة ودبلجة الفيديوهات الاحترافي.\n"
+        "أرسل لي أي مقطع فيديو وسأقوم بمعالجته فوراً بدقة عالية.\n\n"
+        "اختر من القائمة أدناه أو أرسل الفيديو للبدء 👇"
     )
 
-async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    video = update.message.video or update.message.document
-    if not video:
-        return
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 اشتراكي", callback_data="my_subscription")],
+        [InlineKeyboardButton("🔑 تفعيل كود الاشتراك", callback_data="activate_help")]
+    ])
 
-    context.user_data['video_obj'] = video
+    await update.message.reply_text(welcome_text, reply_markup=keyboard)
 
-    keyboard = [
-        [
-            InlineKeyboardButton("📝 ترجمة أفلام (فصحى)", callback_data="mode_sub_formal"),
-            InlineKeyboardButton("😎 ترجمة أفلام (عامية)", callback_data="mode_sub_slang")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "📥 تم استلام الفيديو بنجاح!\nاختر نمط الترجمة المطلوب:",
-        reply_markup=reply_markup
-    )
 
-async def process_and_send_subtitle(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str, action_msg: str):
-    query = update.callback_query
-    chat_id = update.effective_chat.id
-    
-    input_path = "input_video.mp4"
-    audio_path = "extracted_audio.mp3"
-    output_path = "output_video.mp4"
-    srt_path = "subtitles.srt"
-    
-    try:
-        video_obj = context.user_data.get('video_obj')
-        if not video_obj:
-            await query.edit_message_text("❌ عذراً، لم أتمكن من العثور على الفيديو.")
-            return
-
-        file = await context.bot.get_file(video_obj.file_id)
-        await query.edit_message_text(action_msg)
-        
-        # 1. تحميل الفيديو الأصلي
-        await file.download_to_drive(input_path)
-
-        # 2. استخراج الصوت من الفيديو باستخدام FFmpeg
-        extract_process = await asyncio.create_subprocess_exec(
-            'ffmpeg', '-y', '-i', input_path, '-vn', '-acodec', 'libmp3lame', '-q:a', '4', audio_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        await extract_process.communicate()
-
-        # 3. إرسال الصوت لـ OpenAI Whisper API لتفريغه
-        transcribed_text = ""
-        if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
-            with open(audio_path, "rb") as audio_file:
-                prompt_instruction = "Translate and transcribe accurately into cinematic Arabic subtitles." if mode == "فصحى" else "Translate accurately into casual cinematic Arabic slang."
-                
-                try:
-                    transcript = client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=audio_file,
-                        prompt=prompt_instruction
-                    )
-                    transcribed_text = transcript.text
-                except Exception as api_err:
-                    print(f"[OPENAI API ERROR]: {api_err}")
-                    transcribed_text = f"خطأ API: {str(api_err)}"
-
-        if not transcribed_text:
-            transcribed_text = "لم يتم رصد صوت واضح في المقطع"
-
-        # 4. إنشاء ملف ترجمة حقيقي (SRT) يغطي مدة الفيديو بالكامل
-        # نحصل على طول الفيديو الحقيقي لضبط توقيت ظهور الترجمة
-        duration_probe = await asyncio.create_subprocess_exec(
-            'ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', input_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, _ = await duration_probe.communicate()
-        try:
-            video_duration = float(stdout.decode().strip())
-        except:
-            video_duration = 10.0  # قيمة افتراضية في حال الفشل
-
-        # تنسيق ملف الـ SRT لضمان قراءته بشكل سليم
-        srt_content = f"""1
-00:00:00,000 --> 00:0{int(video_duration//60):02d}:{int(video_duration%60):02d},000
-{transcribed_text}
-"""
-        with open(srt_path, "w", encoding="utf-8") as srt_file:
-            srt_file.write(srt_content)
-
-        # 5. حرق الترجمة عبر فلتر الـ subtitles المخصص لملفات SRT (الخيار الأدق للغة العربية)
-        # استخدام مسار آمن لملف الـ SRT داخل أمر FFmpeg
-        process = await asyncio.create_subprocess_exec(
-            'ffmpeg', '-y', '-i', input_path, 
-            '-vf', f"subtitles={srt_path}:force_style='FontName=Sans,FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,BorderStyle=4,Outline=1,Shadow=1,Alignment=2'", 
-            '-c:v', 'libx264', '-preset', 'ultrafast', 
-            '-c:a', 'copy', 
-            output_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            output_path = input_path
-            print(f"[FFmpeg Error]: {stderr.decode('utf-8', errors='ignore')}")
-
-        # 6. إرسال الفيديو للمستخدم
-        with open(output_path, 'rb') as video_file:
-            await context.bot.send_video(
-                chat_id=chat_id,
-                video=video_file,
-                caption=f"✨ تمت المعالجة وحرق الترجمة السينمائية ({mode})"
-            )
-
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        await query.edit_message_text(f"❌ حدث خطأ أثناء المعالجة: {str(e)}")
-
-    finally:
-        for p in [input_path, audio_path, output_path, srt_path]:
-            if os.path.exists(p) and p != output_path:
-                try: os.remove(p)
-                except: pass
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# 2. عرض قائمة "اشتراكي"
+async def subscription_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    choice = query.data
+    user_id = query.from_user.id
     
-    if choice == "ui_ar":
-        await query.edit_message_text("✅ تم اختيار العربية. أرسل مقطع الفيديو الآن:")
-    elif choice == "ui_en":
-        await query.edit_message_text("✅ English selected. Send your video clip now:")
-    elif choice in ["mode_sub_formal", "mode_sub_slang"]:
-        mode_names = {
-            "mode_sub_formal": ("فصحى", "🎙️ جاري استخراج الصوت وتفريغه عبر Whisper (فصحى)..."),
-            "mode_sub_slang": ("عامية", "🎙️ جاري استخراج الصوت وتفريغه عبر Whisper (عامية)...")
-        }
-        mode_text, action_msg = mode_names[choice]
-        asyncio.create_task(process_and_send_subtitle(update, context, mode_text, action_msg))
+    user_data = users_db.get(user_id, {"status": "trial", "clips_left": MAX_TRIAL_CLIPS, "tier": "تجريبي"})
+    
+    status_text = "🟢 فعال" if user_data["clips_left"] > 0 or user_data["status"] == "active" else "🔴 منتهي"
 
-async def main():
-    if not TOKEN:
-        return
-    app = ApplicationBuilder().token(TOKEN).read_timeout(60).write_timeout(60).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    text = (
+        f"📊 تفاصيل اشتراكي:\n\n"
+        f"• نوع الباقة: {user_data['tier']}\n"
+        f"• حالة الاشتراك: {status_text}\n"
+        f"• المقاطع المتاحة لديك: {user_data['clips_left']} مقاطع\n\n"
+        f"لترقية باقتك، يرجى شحن كود التفعيل عبر الأمر:\n`/activate [الكود]`"
+    )
     
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    await asyncio.Event().wait()
+    await query.message.edit_text(text, parse_mode="Markdown")
+
+
+# 3. تفعيل كود الاشتراك عبر الأمر /activate
+async def activate_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    args = context.args
+    
+    if not args:
+        await update.message.reply_text("⚠️ يرجى كتابة الكود بعد الأمر هكذا:\n`/activate VIP-XXXX`", parse_mode="Markdown")
+        return
+
+    code = args[0]
+    
+    # التحقق من كود التفعيل (يرتبط بمتجرك لاحقاً)
+    if code.startswith("VIP-"): 
+        users_db[user_id] = {
+            "status": "active",
+            "clips_left": 999, # رصيد غير محدود بذكاء للباقة المدفوعة
+            "tier": "الباقة المدفوعة الاحترافية"
+        }
+        await update.message.reply_text("✨ تم تفعيل باقتك المدفوعة بنجاح! استمتع بخدمات غير محدودة.")
+    else:
+        await update.message.reply_text("❌ عذراً، كود التفعيل غير صحيح أو منتهي الصلاحية.")
+
+
+# 4. استقبال الفيديو مع فحص الثغرات وطول المقطع
+async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    # التحقق من رصيد المستخدم
+    user_data = users_db.get(user_id, {"clips_left": 0, "status": "trial"})
+    if user_data["clips_left"] <= 0:
+        await update.message.reply_text(
+            "⚠️ عذراً، انتهت مقاطعك المجانية!\n"
+            "للاشتراك وشحن رصيدك، يرجى زيارة المتجر وتفعيل الكود عبر الأمر `/activate`."
+        )
+        return
+
+    # فحص طول الفيديو لمنع استغلال التجربة المجانية بحلقات المسلسلات
+    video = update.message.video
+    if video:
+        video_duration_minutes = video.duration / 60
+        
+        # قفل التجربة المجانية بمقاطع أقصاها 10 دقائق
+        if user_data["status"] == "trial" and video_duration_minutes > MAX_TRIAL_DURATION:
+            await update.message.reply_text(
+                f"⚠️ عذراً، أقصى طول مسموح للمقطع في **التجربة المجانية** هو {MAX_TRIAL_DURATION} دقائق فقط!\n"
+                "لرفع مقاطع طويلة وحلقات مسلسلات، يرجى ترقية حسابك إلى الباقة المدفوعة عبر `/activate`."
+            )
+            return
+            
+        # فحص مقاطع الباقات المدفوعة (أقصى حد 60 دقيقة)
+        if user_data["status"] == "active" and video_duration_minutes > MAX_PAID_DURATION:
+            await update.message.reply_text(
+                f"⚠️ عذراً، الحد الأقصى لطول المقطع الواحد هو {MAX_PAID_DURATION} دقيقة."
+            )
+            return
+
+    # واجهة الخيارات النظيفة (بدون حشو، معتمدين الفصحى واللغات العالمية)
+    prompt_text = "⚙️ كيف ترغب في معالجة هذا الفيديو؟"
+    
+    options_markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📝 ترجمة (فصحى)", callback_data="trans_formal"),
+            InlineKeyboardButton("🎙️ دبلجة (عربي فصحى)", callback_data="dub_ar_formal")
+        ],
+        [
+            InlineKeyboardButton("🌍 دبلجة (لغات عالمية)", callback_data="dub_global_lang")
+        ]
+    ])
+
+    await update.message.reply_text(prompt_text, reply_markup=options_markup)
+
+
+# 5. معالجة اختيار لغات الدبلجة العالمية
+async def handle_dub_languages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    languages_markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🇪🇸 إسباني", callback_data="lang_es"),
+            InlineKeyboardButton("🇮🇳 هندي", callback_data="lang_hi")
+        ],
+        [
+            InlineKeyboardButton("🇳🇱 هولندي", callback_data="lang_nl"),
+            InlineKeyboardButton("🇬🇧 إنجليزي", callback_data="lang_en")
+        ],
+        [
+            InlineKeyboardButton("🔙 رجوع", callback_data="back_to_main")
+        ]
+    ])
+
+    await query.message.edit_text("🌍 اختر لغة الدبلجة المستهدفة:", reply_markup=languages_markup)
+
+
+# 6. بدء المعالجة الفعلية للمقطع
+async def process_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    # خصم مقطع من رصيد المستخدم التجريبي فقط
+    if user_id in users_db and users_db[user_id]["status"] == "trial":
+        users_db[user_id]["clips_left"] -= 1
+
+    # رسائل النظام النظيفة والمتفق عليها
+    await query.message.edit_text("⏳ جاري الترجمة، الرجاء الانتظار...")
+    
+    # [هنا يوضع كود ربط الذكاء الاصطناعي والـ API مستقبلاً]
+    
+    # بعد اكتمال المعالجة:
+    await query.message.reply_text("✨ تمت ترجمة المقطع.")
+
+
+def main():
+    # استبدل هذا التوكن بتوكن بوتك الفعلي من BotFather
+    TOKEN = "YOUR_BOT_TOKEN_HERE"
+    
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    # الأوامر الأساسية
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("activate", activate_code))
+    
+    # استقبال الفيديوهات
+    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
+    
+    # معالجة الضغط على الأزرار
+    app.add_handler(CallbackQueryHandler(subscription_menu, pattern="my_subscription"))
+    app.add_handler(CallbackQueryHandler(handle_dub_languages, pattern="dub_global_lang"))
+    app.add_handler(CallbackQueryHandler(process_action, pattern="^(trans_|dub_ar_formal|lang_)"))
+
+    print("🤖 البوت يعمل الآن وجاهز...")
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
