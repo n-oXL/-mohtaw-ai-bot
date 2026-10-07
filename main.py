@@ -1,8 +1,27 @@
 import os
+import random
+import string
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+
+# رابط حساب الدعم الفني المباشر
+SUPPORT_USERNAME = "https://t.me/MOYG1"
+LOCAL_PAYMENT_LINK = "https://your-saudi-payment-store.com" # استبدله برابط متجرك المحلي السعودي
+
+# توليد 350 كود عشوائي طويل لا يمكن تخمينه أبداً
+def generate_secure_codes(num=350, length=24):
+    codes = set()
+    characters = string.ascii_letters + string.digits
+    while len(codes) < num:
+        code = "".join(random.choices(characters, k=length))
+        formatted_code = f"MHT-{code[:6]}-{code[6:12]}-{code[12:18]}-{code[18:]}"
+        codes.add(formatted_code)
+    return codes
+
+VALID_SUBSCRIPTION_CODES = generate_secure_codes(350, 24)
+VALID_SUBSCRIPTION_CODES.add("WEEK7-FARIS-PRO-2026")
 
 # 1. سيرفر الويب الوهمي لترضية رندر
 class SimpleHandler(BaseHTTPRequestHandler):
@@ -30,9 +49,8 @@ def get_main_menu_markup():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name or "فارس"
     
-    # تهيئة بيانات المستخدم المجانية إذا لم تكن موجودة
     if 'free_minutes_left' not in context.user_data:
-        context.user_data['free_minutes_left'] = 30.0  # 30 دقيقة مجانية إجمالية
+        context.user_data['free_minutes_left'] = 30.0
         context.user_data['is_subscribed'] = False
 
     welcome_text = (
@@ -51,48 +69,29 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "buy_subscription":
         buy_keyboard = [
-            [InlineKeyboardButton("📅 اشتراك أسبوع (15 ريال)", callback_data="pay_week")],
-            [InlineKeyboardButton("📅 اشتراك شهر (45 ريال)", callback_data="pay_month")],
-            [InlineKeyboardButton("📅 اشتراك ٣ شهور (120 ريال)", callback_data="pay_3months")],
-            [InlineKeyboardButton("📅 اشتراك سنة (350 ريال)", callback_data="pay_year")],
+            [InlineKeyboardButton("🇸🇦 الدفع المحلي السعودي (مدى، أبل باي)", url=LOCAL_PAYMENT_LINK)],
+            [InlineKeyboardButton("🌍 الدفع الخارجي (تواصل مع الدعم)", url=SUPPORT_USERNAME)],
+            [InlineKeyboardButton("🔑 تفعيل كود الاشتراك", callback_data="activate_code")],
             [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
         ]
         await query.message.edit_text(
-            "💳 **اختر الباقة المناسبة للشراء:**\n\n"
-            "بعد اختيار الباقة، ستظهر لك طرق الدفع لإتمام عملية الشراء واستلام كود الاشتراك.",
+            "💳 **اختر طريقة الدفع المناسبة لك:**\n\n"
+            "• **داخل السعودية**: استخدم الدفع المحلي السريع (مدى، أبل باي، وبطاقات البنوك السعودية).\n"
+            "• **خارج السعودية**: تواصل مباشرة مع الدعم الفني للاستفادة من الدفع الخارجي (فيزا، لايك كارد، أو عملات رقمية).\n\n"
+            "بعد إتمام الدفع، احصل على الكود وقم بتفْعيله عبر زر (تفعيل كود الاشتراك).",
             reply_markup=InlineKeyboardMarkup(buy_keyboard),
-            parse_mode="Markdown"
-        )
-
-    elif data.startswith("pay_"):
-        prices = {
-            "pay_week": ("أسبوع", "15 ريال"),
-            "pay_month": ("شهر", "45 ريال"),
-            "pay_3months": ("٣ شهور", "120 ريال"),
-            "pay_year": ("سنة", "350 ريال")
-        }
-        plan_info = prices.get(data, ("أسبوع", "15 ريال"))
-        
-        payment_text = (
-            f"🛒 **تفاصيل طلب باقة: {plan_info[0]}**\n"
-            f"💰 السعر: {plan_info[1]}\n\n"
-            "💳 **طرق الدفع المتاحة:**\n"
-            "• تحويل بنكي (الراجحي / الإنماء)\n"
-            "• STC Pay / Urpay\n\n"
-            "يرجى التحويل وإرسال إيصال الدفع للإدارة، وسيتم إرسال كود التفعيل الخاص بك فوراً."
-        )
-        await query.message.edit_text(
-            payment_text,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔑 تفعيل كود الاشتراك", callback_data="activate_code")],
-                [InlineKeyboardButton("🔙 رجوع للباقات", callback_data="buy_subscription")]
-            ]),
             parse_mode="Markdown"
         )
 
     elif data == "activate_code":
         context.user_data['waiting_for_code'] = True
-        await query.message.reply_text("🔑 حسناً، يرجى إرسال كود الاشتراك الآن لتفعيله (مثال للتجربة: `WEEK7`):")
+        await query.message.reply_text(
+            "🔑 **تفعيل كود الاشتراك:**\n\n"
+            "الرجاء إرسال أمر التفعيل مع الكود الذي استلمته بهذا الشكل:\n"
+            "`/activate <كود_الاشتراك>`\n\n"
+            "(مثال للتجربة: `/activate WEEK7-FARIS-PRO-2026`)",
+            parse_mode="Markdown"
+        )
 
     elif data == "menu_translation":
         trans_keyboard = [
@@ -131,40 +130,58 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_menu_markup()
         )
 
-# 4. معالجة النصوص (إدخال الكود)
+# 4. معالجة أمر التفعيل والكود
+async def activate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    parts = text.split(" ", 1)
+    
+    if len(parts) < 2:
+        await update.message.reply_text("❌ يرجى إرسال الأمر بالطريقة الصحيحة مع الكود، مثال:\n`/activate MHT-XXXX-XXXX-...`", parse_mode="Markdown")
+        return
+
+    code = parts[1].strip()
+
+    if code in VALID_SUBSCRIPTION_CODES:
+        context.user_data['is_subscribed'] = True
+        context.user_data['waiting_for_code'] = False
+        await update.message.reply_text(
+            "✅ تم تفعيل الكود بنجاح!\n"
+            "اشتراكك مفعل الآن ولديك صلاحية كاملة. اختر من القائمة قسم الترجمة أو الدبلجة وارسل المقطع لنبدأ الترجمة والدبلجة 🚀",
+            reply_markup=get_main_menu_markup()
+        )
+    else:
+        await update.message.reply_text("❌ الكود خطأ أو غير صحيح. تأكد من الكود الذي استلمته وأعد المحاولة.")
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('waiting_for_code'):
         code = update.message.text.strip()
-        context.user_data['waiting_for_code'] = False
-        
-        if code in ["WEEK7", "week7", "Faris7"]:
+        if code in VALID_SUBSCRIPTION_CODES:
             context.user_data['is_subscribed'] = True
+            context.user_data['waiting_for_code'] = False
             await update.message.reply_text(
-                "✨ تم تفعيل كود الاشتراك بنجاح!\n"
-                "لديك الآن دقائق غير محدودة بشروط المحاولات حسب مدة الحلقة.\n"
+                "✅ تم تفعيل الكود بنجاح!\n"
                 "اختر من القائمة قسم الترجمة أو الدبلجة وارسل المقطع لنبدأ الترجمة والدبلجة 🚀",
                 reply_markup=get_main_menu_markup()
             )
         else:
-            await update.message.reply_text("❌ عذراً، كود الاشتراك غير صحيح. تأكد من الكود أو قم بشراء كود جديد.")
+            await update.message.reply_text("❌ الكود خطأ. تأكد من الكود أو تواصل مع الدعم الفني للحصول على كود صحيح.")
     else:
         await update.message.reply_text("الرجاء استخدام الأزرار في القائمة أو إرسال فيديو للترجمة والدبلجة.")
 
-# 5. معالجة الفيديوهات والتحقق من الشروط والثغرات
+# 5. معالجة الفيديوهات
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video = update.message.video or update.message.document
-    duration_seconds = getattr(video, 'duration', 60) # افتراضي دقيقة لو ما انقرصت
+    duration_seconds = getattr(video, 'duration', 60)
     duration_minutes = duration_seconds / 60.0
 
     is_subscribed = context.user_data.get('is_subscribed', False)
 
     if not is_subscribed:
-        # فحص باقة التجربة المجانية (30 دقيقة إجمالية)
         free_left = context.user_data.get('free_minutes_left', 30.0)
         if free_left <= 0:
             await update.message.reply_text(
                 "❌ لقد استنفذت الـ 30 دقيقة المجانية الخاصة بك!\n"
-                "يرجى شراء كود اشتراك وتفعيله للاستمرار.",
+                "يرجى شراء اشتراك وتفعيل الكود للاستمرار.",
                 reply_markup=get_main_menu_markup()
             )
             return
@@ -176,15 +193,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # خصم من الباقة المجانية
         context.user_data['free_minutes_left'] = free_left - duration_minutes
     
-    else:
-        # فحص نظام المحاولات حسب مدة الحلقة للمشتركين
-        # (من 25 إلى 60 دقيقة = 3 محاولات / 10 إلى 20 = 5 محاولات / 5 إلى 10 = 10 محاولات / أقل من 5 = 12 محاولة - تتجدد كل 6 ساعات)
-        # سيتم تنفيذ حدود المحاولات هنا برمجياً
-        pass
-
     mode = context.user_data.get('selected_mode', 'ترجمة عربية فصحى')
     
     if "دبلجة" in mode:
@@ -206,6 +216,7 @@ def main():
     application = Application.builder().token(token).build()
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("activate", activate_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
