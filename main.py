@@ -1,204 +1,138 @@
 import os
-import logging
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# إعداد السجلات (Logging)
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# 1. سيرفر الويب الوهمي لترضية رندر (Render Web Service Port Check)
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running successfully!")
 
-# قاعدة بيانات وهمية مؤقتة (تستبدل لاحقاً بقاعدة بيانات حقيقية مثل SQLite أو PostgreSQL)
-users_db = {}
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    server.serve_forever()
 
-# إعدادات النظام والشروط الصارمة لحماية الـ API والسيرفر
-MAX_TRIAL_CLIPS = 3          # عدد المقاطع التجريبية المجانية لكل مستخدم
-MAX_TRIAL_DURATION = 10      # أقصى حد لطول المقطع المجاني الواحد (10 دقائق) لمنع حرق الـ API بحلقات المسلسلات
-MAX_PAID_DURATION = 60       # أقصى حد لطول المقطع في الباقات المدفوعة (60 دقيقة)
+# القائمة الرئيسية المدمجة (اشتراكات، تفعيل، ودبلجة وترجمة بلغات عالمية)
+def get_main_menu_markup():
+    keyboard = [
+        # قسم الاشتراكات
+        [InlineKeyboardButton("📅 اشتراك أسبوع", callback_data="plan_week"),
+         InlineKeyboardButton("📅 اشتراك شهر", callback_data="plan_month")],
+        [InlineKeyboardButton("📅 اشتراك ٣ شهور", callback_data="plan_3months"),
+         InlineKeyboardButton("📅 اشتراك سنة", callback_data="plan_year")],
+        # تفعيل الكود
+        [InlineKeyboardButton("🔑 تفعيل كود الاشتراك", callback_data="activate_code")],
+        # قسم الدبلجة والترجمة (شامل اللغات العالمية)
+        [InlineKeyboardButton("🎙️ دبلجة (عربي فصحى)", callback_data="dub_arabic"),
+         InlineKeyboardButton("📝 ترجمة (فصحى)", callback_data="trans_arabic")],
+        [InlineKeyboardButton("🌍 دبلجة وترجمة (لغات عالمية)", callback_data="dub_global")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
-# 1. أمر البداية /start
+# 2. دالة البدء
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = user.id
-
-    # منح باقة التجربة المجانية للمستخدم الجديد (مربوطة بالـ Telegram ID وبعدد المقاطع)
-    if user_id not in users_db:
-        users_db[user_id] = {
-            "status": "trial",
-            "clips_left": MAX_TRIAL_CLIPS,
-            "tier": "التجربة المجانية"
-        }
-
+    user_name = update.effective_user.first_name or "فارس"
     welcome_text = (
-        f"👋 أهلاً بك يا غالي!\n\n"
-        "أنا بوت ترجمة ودبلجة الفيديوهات الاحترافي.\n"
-        "أرسل لي أي مقطع فيديو وسأقوم بمعالجته فوراً بدقة عالية.\n\n"
-        "اختر من القائمة أدناه أو أرسل الفيديو للبدء 👇"
+        f"أهلاً بك {user_name}\n"
+        "بوت ترجمة ودبلجة الفيديوهات الاحترافي والاسهل\n"
+        "اختر من القائمة أدناه ما تُريد"
     )
+    await update.message.reply_text(welcome_text, reply_markup=get_main_menu_markup())
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 اشتراكي", callback_data="my_subscription")],
-        [InlineKeyboardButton("🔑 تفعيل كود الاشتراك", callback_data="activate_help")]
-    ])
-
-    await update.message.reply_text(welcome_text, reply_markup=keyboard)
-
-
-# 2. عرض قائمة "اشتراكي"
-async def subscription_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# 3. معالجة الأزرار
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = query.from_user.id
-    
-    user_data = users_db.get(user_id, {"status": "trial", "clips_left": MAX_TRIAL_CLIPS, "tier": "تجريبي"})
-    
-    status_text = "🟢 فعال" if user_data["clips_left"] > 0 or user_data["status"] == "active" else "🔴 منتهي"
 
-    text = (
-        f"📊 تفاصيل اشتراكي:\n\n"
-        f"• نوع الباقة: {user_data['tier']}\n"
-        f"• حالة الاشتراك: {status_text}\n"
-        f"• المقاطع المتاحة لديك: {user_data['clips_left']} مقاطع\n\n"
-        f"لترقية باقتك، يرجى شحن كود التفعيل عبر الأمر:\n`/activate [الكود]`"
-    )
-    
-    await query.message.edit_text(text, parse_mode="Markdown")
+    data = query.data
 
-
-# 3. تفعيل كود الاشتراك عبر الأمر /activate
-async def activate_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    args = context.args
-    
-    if not args:
-        await update.message.reply_text("⚠️ يرجى كتابة الكود بعد الأمر هكذا:\n`/activate VIP-XXXX`", parse_mode="Markdown")
-        return
-
-    code = args[0]
-    
-    # التحقق من كود التفعيل (يرتبط بمتجرك لاحقاً)
-    if code.startswith("VIP-"): 
-        users_db[user_id] = {
-            "status": "active",
-            "clips_left": 999, # رصيد غير محدود بذكاء للباقة المدفوعة
-            "tier": "الباقة المدفوعة الاحترافية"
+    if data.startswith("plan_"):
+        plan_names = {
+            "plan_week": "أسبوع (كود التفعيل المجاني: WEEK7)",
+            "plan_month": "شهر",
+            "plan_3months": "٣ شهور",
+            "plan_year": "سنة"
         }
-        await update.message.reply_text("✨ تم تفعيل باقتك المدفوعة بنجاح! استمتع بخدمات غير محدودة.")
+        selected = plan_names.get(data, "الباقة")
+        await query.message.edit_text(
+            f"🛒 لقد اخترت باقة: **{selected}**.\n\n"
+            "اضغط على زر تفعيل كود الاشتراك وأرسل الكود لتفعيل باقتك فوراً.",
+            reply_markup=get_main_menu_markup(),
+            parse_mode="Markdown"
+        )
+
+    elif data == "activate_code":
+        context.user_data['waiting_for_code'] = True
+        await query.message.reply_text("🔑 حسناً، يرجى إرسال كود الاشتراك الآن (مثال: `WEEK7`):")
+
+    elif data in ["dub_arabic", "trans_arabic", "dub_global"]:
+        modes = {
+            "dub_arabic": "دبلجة (عربي فصحى)",
+            "trans_arabic": "ترجمة (فصحى)",
+            "dub_global": "دبلجة وترجمة (لغات عالمية)"
+        }
+        context.user_data['selected_mode'] = modes[data]
+        await query.message.reply_text(
+            f"✅ تم اختيار وضع: **{modes[data]}**.\n\n"
+            "الآن أرسل مقطع الفيديو لنبدأ المعالجة الاحترافية 🎬",
+            parse_mode="Markdown"
+        )
+
+# 4. معالجة النصوص (إدخال كود التفعيل)
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get('waiting_for_code'):
+        code = update.message.text.strip()
+        context.user_data['waiting_for_code'] = False
+        
+        # تفعيل الكود (كود الأسبوع التجريبي المجاني: WEEK7)
+        if code in ["WEEK7", "week7", "Faris7", "VIP"]:
+            context.user_data['is_subscribed'] = True
+            await update.message.reply_text(
+                "✨ تم تفعيل كود الاشتراك بنجاح!\n"
+                "يمكنك الآن اختيار نمط الدبلجة أو الترجمة من القائمة وإرسال مقطعك 🚀",
+                reply_markup=get_main_menu_markup()
+            )
+        else:
+            await update.message.reply_text("❌ عذراً، كود الاشتراك غير صحيح. تأكد من الكود وأعد المحاولة.")
     else:
-        await update.message.reply_text("❌ عذراً، كود التفعيل غير صحيح أو منتهي الصلاحية.")
+        await update.message.reply_text("الرجاء استخدام الأزرار في القائمة أو إرسال فيديو للترجمة.")
 
-
-# 4. استقبال الفيديو مع فحص الثغرات وطول المقطع
+# 5. معالجة الفيديوهات
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    # التحقق من رصيد المستخدم
-    user_data = users_db.get(user_id, {"clips_left": 0, "status": "trial"})
-    if user_data["clips_left"] <= 0:
+    if not context.user_data.get('is_subscribed', False):
         await update.message.reply_text(
-            "⚠️ عذراً، انتهت مقاطعك المجانية!\n"
-            "للاشتراك وشحن رصيدك، يرجى زيارة المتجر وتفعيل الكود عبر الأمر `/activate`."
+            "❌ عذراً، يجب عليك تفعيل كود الاشتراك أولاً قبل إرسال الفيديوهات!",
+            reply_markup=get_main_menu_markup()
         )
         return
 
-    # فحص طول الفيديو لمنع استغلال التجربة المجانية بحلقات المسلسلات
-    video = update.message.video
-    if video:
-        video_duration_minutes = video.duration / 60
-        
-        # قفل التجربة المجانية بمقاطع أقصاها 10 دقائق
-        if user_data["status"] == "trial" and video_duration_minutes > MAX_TRIAL_DURATION:
-            await update.message.reply_text(
-                f"⚠️ عذراً، أقصى طول مسموح للمقطع في **التجربة المجانية** هو {MAX_TRIAL_DURATION} دقائق فقط!\n"
-                "لرفع مقاطع طويلة وحلقات مسلسلات، يرجى ترقية حسابك إلى الباقة المدفوعة عبر الأمر `/activate`."
-            )
-            return
-            
-        # فحص مقاطع الباقات المدفوعة (أقصى حد 60 دقيقة)
-        if user_data["status"] == "active" and video_duration_minutes > MAX_PAID_DURATION:
-            await update.message.reply_text(
-                f"⚠️ عذراً، الحد الأقصى لطول المقطع الواحد هو {MAX_PAID_DURATION} دقيقة."
-            )
-            return
-
-    # واجهة الخيارات النظيفة
-    prompt_text = "⚙️ كيف ترغب في معالجة هذا الفيديو؟"
-    
-    options_markup = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📝 ترجمة (فصحى)", callback_data="trans_formal"),
-            InlineKeyboardButton("🎙️ دبلجة (عربي فصحى)", callback_data="dub_ar_formal")
-        ],
-        [
-            InlineKeyboardButton("🌍 دبلجة (لغات عالمية)", callback_data="dub_global_lang")
-        ]
-    ])
-
-    await update.message.reply_text(prompt_text, reply_markup=options_markup)
-
-
-# 5. معالجة اختيار لغات الدبلجة العالمية
-async def handle_dub_languages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    languages_markup = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🇪🇸 إسباني", callback_data="lang_es"),
-            InlineKeyboardButton("🇮🇳 هندي", callback_data="lang_hi")
-        ],
-        [
-            InlineKeyboardButton("🇳🇱 هولندي", callback_data="lang_nl"),
-            InlineKeyboardButton("🇬🇧 إنجليزي", callback_data="lang_en")
-        ],
-        [
-            InlineKeyboardButton("🔙 رجوع", callback_data="back_to_main")
-        ]
-    ])
-
-    await query.message.edit_text("🌍 اختر لغة الدبلجة المستهدفة:", reply_markup=languages_markup)
-
-
-# 6. بدء المعالجة الفعلية للمقطع
-async def process_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-
-    # خصم مقطع من رصيد المستخدم التجريبي فقط
-    if user_id in users_db and users_db[user_id]["status"] == "trial":
-        users_db[user_id]["clips_left"] -= 1
-
-    # رسائل النظام النظيفة
-    await query.message.edit_text("⏳ جاري الترجمة، الرجاء الانتظار...")
-    
-    # [هنا يوضع كود ربط الذكاء الاصطناعي والـ API مستقبلاً]
-    
-    # بعد اكتمال المعالجة:
-    await query.message.reply_text("✨ تمت ترجمة المقطع.")
-
+    mode = context.user_data.get('selected_mode', 'ترجمة (فصحى)')
+    await update.message.reply_text(f"⏳ جاري معالجة الفيديو بنمط [{mode}]، الرجاء الانتظار...")
+    # هنا يتم وضع كود دبلجة أو ترجمة الفيديو الفعلي
+    await update.message.reply_text("✨ تمت معالجة وترجمة المقطع بنجاح.")
 
 def main():
-    # سحب التوكن أوتوماتيكياً من متغيرات البيئة في رندر (BOT_TOKEN)
-    TOKEN = os.environ.get("BOT_TOKEN")
-    
-    if not TOKEN:
-        raise ValueError("❌ خطأ: لم يتم العثور على متغير البيئة BOT_TOKEN!")
+    t = threading.Thread(target=run_web_server)
+    t.daemon = True
+    t.start()
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    token = os.environ.get("BOT_TOKEN")
+    if not token:
+        raise ValueError("No BOT_TOKEN found!")
 
-    # الأوامر الأساسية
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("activate", activate_code))
-    
-    # استقبال الفيديوهات
-    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
-    
-    # معالجة الضغط على الأزرار
-    app.add_handler(CallbackQueryHandler(subscription_menu, pattern="my_subscription"))
-    app.add_handler(CallbackQueryHandler(handle_dub_languages, pattern="dub_global_lang"))
-    app.add_handler(CallbackQueryHandler(process_action, pattern="^(trans_|dub_ar_formal|lang_)"))
+    application = Application.builder().token(token).build()
 
-    print("🤖 البوت يعمل الآن وجاهز...")
-    app.run_polling()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
+
+    print("Bot is starting polling...")
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
