@@ -13,7 +13,8 @@ from telegram.ext import (
 TOKEN = "8722033585:AAGLT35kIiHycgp7jL6-y8trr5ZT2J2OKdo"
 
 # معرف جروب الإدارة (لتلقي التنبيهات)
-ADMIN_GROUP_ID = -https://t.me/+cB3crwuCLWI2MzZk
+ADMIN_GROUP_ID = -1005398355811
+
 
 # رابط القناة للشروط ويوزر الدعم الفني
 CHANNEL_LINK = "https://t.me/my_translator9"
