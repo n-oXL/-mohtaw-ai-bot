@@ -1,228 +1,314 @@
-import os
-import random
-import string
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+import logging
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
-# رابط حساب الدعم الفني المباشر
+# ضع توكن البوت الخاص بك هنا
+TOKEN = "8722033585:AAGLT35kIiHycgp7jL6-y8trr5ZT2J2OKdo"
+
+# معرف جروب الإدارة (لتلقي التنبيهات)
+ADMIN_GROUP_ID = -https://t.me/+cB3crwuCLWI2MzZk
+
+# رابط القناة للشروط ويوزر الدعم الفني
+CHANNEL_LINK = "https://t.me/my_translator9"
 SUPPORT_USERNAME = "https://t.me/MOYG1"
-LOCAL_PAYMENT_LINK = "https://your-saudi-payment-store.com" # استبدله برابط متجرك المحلي السعودي
 
-# توليد 350 كود عشوائي طويل لا يمكن تخمينه أبداً
-def generate_secure_codes(num=350, length=24):
-    codes = set()
-    characters = string.ascii_letters + string.digits
-    while len(codes) < num:
-        code = "".join(random.choices(characters, k=length))
-        formatted_code = f"MHT-{code[:6]}-{code[6:12]}-{code[12:18]}-{code[18:]}"
-        codes.add(formatted_code)
-    return codes
+# إعداد السجلات
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
 
-VALID_SUBSCRIPTION_CODES = generate_secure_codes(350, 24)
-VALID_SUBSCRIPTION_CODES.add("WEEK7-FARIS-PRO-2026")
+# قاموس لتتبع استهلاك المستخدمين في الباقة المجانية (كمثال تجريبي)
+# المفتاح: user_id, القيمة: إجمالي الثواني المستخدمة (الحد الأقصى 180 ثانية = 3 دقائق)
+free_tier_usage = {}
 
-# 1. سيرفر الويب الوهمي لترضية رندر
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is running successfully!")
 
-def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
-    server.serve_forever()
-
-# القائمة الرئيسية
-def get_main_menu_markup():
-    keyboard = [
-        [InlineKeyboardButton("💳 شراء كود اشتراك", callback_data="buy_subscription")],
-        [InlineKeyboardButton("🔑 تفعيل كود الاشتراك", callback_data="activate_code")],
-        [InlineKeyboardButton("📝 قسم الترجمة", callback_data="menu_translation"),
-         InlineKeyboardButton("🎙️ قسم الدبلجة", callback_data="menu_dubbing")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-# 2. دالة البدء
+# أمر البداية /start والقائمة الرئيسية
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_name = update.effective_user.first_name or "فارس"
-    
-    if 'free_minutes_left' not in context.user_data:
-        context.user_data['free_minutes_left'] = 30.0
-        context.user_data['is_subscribed'] = False
+  keyboard = [
+      [InlineKeyboardButton("🎙️ قسم الدبلجة", callback_data="dubbing_menu")],
+      [InlineKeyboardButton("📝 قسم الترجمة", callback_data="translation_menu")],
+      [InlineKeyboardButton("💳 شراء كود اشتراك", callback_data="buy_code_menu")],
+      [
+          InlineKeyboardButton(
+              "🔑 تفعيل كود الاشتراك", callback_data="activate_code_menu"
+          )
+      ],
+      [InlineKeyboardButton("📊 اشتراكي", callback_data="my_subscription")],
+      [InlineKeyboardButton("🎧 قسم الدعم الفني", url=SUPPORT_USERNAME)],
+  ]
+  reply_markup = InlineKeyboardMarkup(keyboard)
 
-    welcome_text = (
-        f"أهلاً بك {user_name}\n"
-        "بوت ترجمة ودبلجة الفيديوهات والاسهل\n"
-        "اختر من القائمة أدناه ما تُريد"
-    )
-    await update.message.reply_text(welcome_text, reply_markup=get_main_menu_markup())
+  welcome_text = "أهلاً بك في بوت مترجمي\nاختر القسم المناسب للبدء في الخدمة:"
 
-# 3. معالجة الأزرار
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  if update.callback_query:
     query = update.callback_query
     await query.answer()
+    await query.message.edit_text(welcome_text, reply_markup=reply_markup)
+  else:
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
-    data = query.data
 
-    if data == "buy_subscription":
-        buy_keyboard = [
-            [InlineKeyboardButton("🇸🇦 الدفع المحلي السعودي (مدى، أبل باي)", url=LOCAL_PAYMENT_LINK)],
-            [InlineKeyboardButton("🌍 الدفع الخارجي (تواصل مع الدعم)", url=SUPPORT_USERNAME)],
-            [InlineKeyboardButton("🔑 تفعيل كود الاشتراك", callback_data="activate_code")],
-            [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
-        ]
-        await query.message.edit_text(
-            "💳 **اختر طريقة الدفع المناسبة لك:**\n\n"
-            "• **داخل السعودية**: استخدم الدفع المحلي السريع (مدى، أبل باي، وبطاقات البنوك السعودية).\n"
-            "• **خارج السعودية**: تواصل مباشرة مع الدعم الفني للاستفادة من الدفع الخارجي (فيزا، لايك كارد، أو عملات رقمية).\n\n"
-            "بعد إتمام الدفع، احصل على الكود وقم بتفْعيله عبر زر (تفعيل كود الاشتراك).",
-            reply_markup=InlineKeyboardMarkup(buy_keyboard),
-            parse_mode="Markdown"
-        )
+# قائمة قسم الدبلجة
+async def dubbing_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  query = update.callback_query
+  await query.answer()
 
-    elif data == "activate_code":
-        context.user_data['waiting_for_code'] = True
-        await query.message.reply_text(
-            "🔑 **تفعيل كود الاشتراك:**\n\n"
-            "الرجاء إرسال أمر التفعيل مع الكود الذي استلمته بهذا الشكل:\n"
-            "`/activate <كود_الاشتراك>`\n\n"
-            "(مثال للتجربة: `/activate WEEK7-FARIS-PRO-2026`)",
-            parse_mode="Markdown"
-        )
+  keyboard = [
+      [
+          InlineKeyboardButton(
+              "دبلجة عربية فصحى", callback_data="dub_arabic_classic"
+          )
+      ],
+      [
+          InlineKeyboardButton(
+              "دبلجة لُغات العالم", callback_data="dub_world_languages"
+          )
+      ],
+      [
+          InlineKeyboardButton(
+              "🔙 رجوع للقائمة الرئيسية", callback_data="main_menu"
+          )
+      ],
+  ]
+  reply_markup = InlineKeyboardMarkup(keyboard)
 
-    elif data == "menu_translation":
-        trans_keyboard = [
-            [InlineKeyboardButton("🇸🇦 ترجمة عربية فصحى", callback_data="set_trans_ar")],
-            [InlineKeyboardButton("🌍 ترجمة لغات عالمية", callback_data="set_trans_global")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")]
-        ]
-        await query.message.edit_text("📝 **اختر نوع الترجمة:**", reply_markup=InlineKeyboardMarkup(trans_keyboard), parse_mode="Markdown")
+  await query.message.edit_text(
+      "🎙️ اختر نوع الدبلجة المطلوبة:", reply_markup=reply_markup
+  )
 
-    elif data == "menu_dubbing":
-        dub_keyboard = [
-            [InlineKeyboardButton("🇸🇦 دبلجة عربية فصحى", callback_data="set_dub_ar")],
-            [InlineKeyboardButton("🌍 دبلجة لغات عالمية", callback_data="set_dub_global")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")]
-        ]
-        await query.message.edit_text("🎙️ **اختر نوع الدبلجة:**", reply_markup=InlineKeyboardMarkup(dub_keyboard), parse_mode="Markdown")
 
-    elif data in ["set_trans_ar", "set_trans_global", "set_dub_ar", "set_dub_global"]:
-        modes = {
-            "set_trans_ar": "ترجمة عربية فصحى",
-            "set_trans_global": "ترجمة لغات عالمية",
-            "set_dub_ar": "دبلجة عربية فصحى",
-            "set_dub_global": "دبلجة لغات عالمية"
-        }
-        context.user_data['selected_mode'] = modes[data]
-        await query.message.edit_text(
-            f"✅ تم اختيار النمط: **{modes[data]}**.\n\n"
-            "ارسل المقطع لنبدأ الترجمة والدبلجة 🎬",
-            reply_markup=get_main_menu_markup(),
-            parse_mode="Markdown"
-        )
+# قائمة قسم الترجمة
+async def translation_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  query = update.callback_query
+  await query.answer()
 
-    elif data == "main_menu":
-        await query.message.edit_text(
-            "أهلاً بك مرة أخرى!\nاختر من القائمة أدناه ما تُريد",
-            reply_markup=get_main_menu_markup()
-        )
+  keyboard = [
+      [
+          InlineKeyboardButton(
+              "ترجمة عربية فصحى", callback_data="trans_arabic_classic"
+          )
+      ],
+      [
+          InlineKeyboardButton(
+              "ترجمة لُغات العالم", callback_data="trans_world_languages"
+          )
+      ],
+      [
+          InlineKeyboardButton(
+              "🔙 رجوع للقائمة الرئيسية", callback_data="main_menu"
+          )
+      ],
+  ]
+  reply_markup = InlineKeyboardMarkup(keyboard)
 
-# 4. معالجة أمر التفعيل والكود
+  await query.message.edit_text(
+      "📝 اختر نوع الترجمة المطلوبة:", reply_markup=reply_markup
+  )
+
+
+# قسم شراء كود اشتراك
+async def buy_code_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  query = update.callback_query
+  await query.answer()
+
+  keyboard = [
+      [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
+  ]
+  reply_markup = InlineKeyboardMarkup(keyboard)
+
+  buy_text = (
+      "💳 **شراء كود اشتراك:**\n\n"
+      "لشراء اشتراك جديد، يرجى التواصل مباشرة مع الدعم الفني لتأكيد الدفع واستلام"
+      " الكود الخاص بك."
+  )
+  await query.message.edit_text(
+      buy_text, reply_markup=reply_markup, parse_mode="Markdown"
+  )
+
+
+# قسم تفعيل كود الاشتراك
+async def activate_code_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  query = update.callback_query
+  await query.answer()
+
+  keyboard = [
+      [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
+  ]
+  reply_markup = InlineKeyboardMarkup(keyboard)
+
+  activate_text = (
+      "🔑 **تفعيل كود الاشتراك:**\n\n"
+      "الرجاء إرسال أمر التفعيل مع الكود الذي استلمته بهذا الشكل:\n"
+      "`/activate <كود_الاشتراك>`\n\n"
+      "(مثال للتجربة: `/activate WEEK7-FARIS-PRO-2026`)"
+  )
+  await query.message.edit_text(
+      activate_text, reply_markup=reply_markup, parse_mode="Markdown"
+  )
+
+
+# قسم عرض تفاصيل اشتراك المستخدم
+async def my_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  query = update.callback_query
+  await query.answer()
+
+  keyboard = [
+      [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
+  ]
+  reply_markup = InlineKeyboardMarkup(keyboard)
+
+  sub_text = (
+      "📊 **معلومات اشتراكك:**\n\n"
+      "• نوع الباقة: **المجانية**\n"
+      "• الرصيد المتبقي: مخصص لإجمالي 3 دقائق (تراكمي للمقاطع)\n"
+      "• اللغات المتاحة: (هندي، هولندي، إسباني، بريطاني)\n\n"
+      "💡 *الباقات المدفوعة تتيح لك 10 مقاطع باليوم، لغات كثيرة جداً، ونظام"
+      " المحاولات حسب مدة المقطع:* \n"
+      " - من 35 إلى 60 دقيقة: محاولة واحدة\n"
+      " - من 20 إلى 35 دقيقة: محاولتان\n"
+      " - من 10 إلى 20 دقيقة: ثلاث محاولات\n"
+      " - من 0.01 إلى 10 دقائق: خمس محاولات"
+  )
+  await query.message.edit_text(
+      sub_text, reply_markup=reply_markup, parse_mode="Markdown"
+  )
+
+
+# التعامل مع اختيار خيار دبلجة أو ترجمة وإرسال رسالة مستقلة جديدة
+async def handle_sub_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  query = update.callback_query
+  await query.answer()
+
+  data = query.data
+
+  if "dub_" in data:
+    response_msg = (
+        "تم اختيار قسم الدبلجة.\n"
+        "أهلاً بك في قسم الدبلجة، ارسل المقطع لنبدأ ترجمته.\n\n"
+        f"📌 تأكد أن المقطع يتوافق مع شروط البوت: {CHANNEL_LINK}"
+    )
+  elif "trans_" in data:
+    response_msg = (
+        "تم اختيار قسم الترجمة.\n"
+        "أهلاً بك في قسم الترجمة، ارسل المقطع لنبدأ ترجمته.\n\n"
+        f"📌 تأكد أن المقطع يتوافق مع شروط البوت: {CHANNEL_LINK}"
+    )
+  else:
+    return
+
+  await context.bot.send_message(
+      chat_id=query.message.chat_id, text=response_msg
+  )
+
+
+# أمر تفعيل الكود
 async def activate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    parts = text.split(" ", 1)
-    
-    if len(parts) < 2:
-        await update.message.reply_text("❌ يرجى إرسال الأمر بالطريقة الصحيحة مع الكود، مثال:\n`/activate MHT-XXXX-XXXX-...`", parse_mode="Markdown")
-        return
+  if not context.args:
+    await update.message.reply_text(
+        "❌ الصيغة غير صحيحة.\nالرجاء الاستخدام بهذا الشكل:\n`/activate"
+        " <كود_الاشتراك>`",
+        parse_mode="Markdown",
+    )
+    return
 
-    code = parts[1].strip()
+  code = context.args[0]
+  await update.message.reply_text(
+      f"⏳ جاري التحقق من الكود: `{code}` وتفعيل الاشتراك...", parse_mode="Markdown"
+  )
 
-    if code in VALID_SUBSCRIPTION_CODES:
-        context.user_data['is_subscribed'] = True
-        context.user_data['waiting_for_code'] = False
-        await update.message.reply_text(
-            "✅ تم تفعيل الكود بنجاح!\n"
-            "اشتراكك مفعل الآن ولديك صلاحية كاملة. اختر من القائمة قسم الترجمة أو الدبلجة وارسل المقطع لنبدأ الترجمة والدبلجة 🚀",
-            reply_markup=get_main_menu_markup()
-        )
-    else:
-        await update.message.reply_text("❌ الكود خطأ أو غير صحيح. تأكد من الكود الذي استلمته وأعد المحاولة.")
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('waiting_for_code'):
-        code = update.message.text.strip()
-        if code in VALID_SUBSCRIPTION_CODES:
-            context.user_data['is_subscribed'] = True
-            context.user_data['waiting_for_code'] = False
-            await update.message.reply_text(
-                "✅ تم تفعيل الكود بنجاح!\n"
-                "اختر من القائمة قسم الترجمة أو الدبلجة وارسل المقطع لنبدأ الترجمة والدبلجة 🚀",
-                reply_markup=get_main_menu_markup()
-            )
-        else:
-            await update.message.reply_text("❌ الكود خطأ. تأكد من الكود أو تواصل مع الدعم الفني للحصول على كود صحيح.")
-    else:
-        await update.message.reply_text("الرجاء استخدام الأزرار في القائمة أو إرسال فيديو للترجمة والدبلجة.")
+# فحص الملفات والمقاطع الواردة وتنبيه الإدارة أو خصم رصيد الباقة المجانية
+async def handle_incoming_media(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+  user = update.message.from_user
+  user_id = user.id
 
-# 5. معالجة الفيديوهات
-async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    video = update.message.video or update.message.document
-    duration_seconds = getattr(video, 'duration', 60)
-    duration_minutes = duration_seconds / 60.0
+  # افترضنا أن مدة المقطع المرسل بالثواني (مثلاً نجلب مدة الفيديو الفعلية هنا)
+  # للتوضيح سنفترض أن المقطع مدته 30 ثانية كمثال:
+  video_duration_seconds = 30
 
-    is_subscribed = context.user_data.get('is_subscribed', False)
+  # التحقق من رصيد الباقة المجانية التراكمي (3 دقائق = 180 ثانية)
+  current_usage = free_tier_usage.get(user_id, 0)
+  max_free_seconds = 180  # 3 دقائق
 
-    if not is_subscribed:
-        free_left = context.user_data.get('free_minutes_left', 30.0)
-        if free_left <= 0:
-            await update.message.reply_text(
-                "❌ لقد استنفذت الـ 30 دقيقة المجانية الخاصة بك!\n"
-                "يرجى شراء اشتراك وتفعيل الكود للاستمرار.",
-                reply_markup=get_main_menu_markup()
-            )
-            return
-        
-        if duration_minutes > free_left:
-            await update.message.reply_text(
-                f"❌ عذراً، مدة الفيديو ({duration_minutes:.1f} دقيقة) تتجاوز رصيدك المجاني المتبقي ({free_left:.1f} دقيقة).",
-                reply_markup=get_main_menu_markup()
-            )
-            return
-        
-        context.user_data['free_minutes_left'] = free_left - duration_minutes
-    
-    mode = context.user_data.get('selected_mode', 'ترجمة عربية فصحى')
-    
-    if "دبلجة" in mode:
-        await update.message.reply_text(f"🎙️ جاري دبلجة الفيديو بنمط [{mode}]، الرجاء الانتظار...")
-        await update.message.reply_text("✨ تمت الدبلجة بنجاح.")
-    else:
-        await update.message.reply_text(f"📝 جاري ترجمة الفيديو بنمط [{mode}]، الرجاء الانتظار...")
-        await update.message.reply_text("✨ تمت الترجمة بنجاح.")
+  if current_usage >= max_free_seconds:
+    # رسالة انتهاء الاشتراك المجاني مع العرض
+    expired_msg = (
+        "بما أن انتهى اشتراكك أتمنى أعجبتك الباقة ونالت حُسن رضاك، نقدم لك خصماً"
+        " على باقة الأسبوع من 15 ريال إلى 10 ريال، وينتهي العرض بعد يومين."
+    )
+    await update.message.reply_text(expired_msg)
+    return
+
+  # تحديث الاستهلاك التراكمي للمستخدم
+  free_tier_usage[user_id] = current_usage + video_duration_seconds
+
+  is_spam_or_violation = False  # ضع شرط فحص السبام أو المحتوى المخالف هنا
+
+  if is_spam_or_violation:
+    alert_text = (
+        f"⚠️ **تنبيه مخالفة / سبام جديد!**\n"
+        f"👤 المستخدم: {user.full_name} (@{user.username or 'لا يوجد'})\n"
+        f"🆔 الآيدي: `{user.id}`\n"
+        f"📌 تم رصد محتوى مشبوه (إباحي/عنف/سبام) ويتطلب تدخلك للحظر اليدوي."
+    )
+    await context.bot.send_message(
+        chat_id=ADMIN_GROUP_ID, text=alert_text, parse_mode="Markdown"
+    )
+    await update.message.reply_text(
+        "عذراً، تم رصد مخالفة في المحتوى المرسل وتم إبلاغ الإدارة."
+    )
+  else:
+    await update.message.reply_text(
+        "✅ تم استلام المقطع بنجاح، جاري معالجته..."
+    )
+
 
 def main():
-    t = threading.Thread(target=run_web_server)
-    t.daemon = True
-    t.start()
+  app = ApplicationBuilder().token(TOKEN).build()
 
-    token = os.environ.get("BOT_TOKEN")
-    if not token:
-        raise ValueError("No BOT_TOKEN found!")
+  app.add_handler(CommandHandler("start", start))
+  app.add_handler(CommandHandler("activate", activate_command))
+  app.add_handler(CallbackQueryHandler(start, pattern="^main_menu$"))
+  app.add_handler(CallbackQueryHandler(dubbing_menu, pattern="^dubbing_menu$"))
+  app.add_handler(
+      CallbackQueryHandler(translation_menu, pattern="^translation_menu$")
+  )
+  app.add_handler(
+      CallbackQueryHandler(buy_code_menu, pattern="^buy_code_menu$")
+  )
+  app.add_handler(
+      CallbackQueryHandler(activate_code_menu, pattern="^activate_code_menu$")
+  )
+  app.add_handler(
+      CallbackQueryHandler(my_subscription, pattern="^my_subscription$")
+  )
+  app.add_handler(
+      CallbackQueryHandler(
+          handle_sub_category,
+          pattern="^(dub_arabic_classic|dub_world_languages|trans_arabic_classic|trans_world_languages)$",
+      )
+  )
 
-    application = Application.builder().token(token).build()
+  app.add_handler(
+      MessageHandler(
+          filters.VIDEO | filters.AUDIO | filters.Document.ALL,
+          handle_incoming_media,
+      )
+  )
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("activate", activate_command))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    application.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
+  print("Bot is running...")
+  app.run_polling()
 
-    print("Bot is starting polling...")
-    application.run_polling()
 
 if __name__ == "__main__":
-    main()
+  main()
