@@ -9,7 +9,7 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = "8722033585:AAGLT35kIiHycgp7jL6-y8trr5ZT2J20Kdo"
+TOKEN = "8722033585:AAGPqAYzDUKPOEXt0mTUS-pwhDRCRENarqI"
 ADMIN_GROUP_ID = -1005398355811
 CHANNEL_LINK = "https://t.me/my_translator9"
 SUPPORT_USERNAME = "https://t.me/MOYG1"
