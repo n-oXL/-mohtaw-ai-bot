@@ -264,7 +264,11 @@ async def handle_incoming_media(update: Update, context: ContextTypes.DEFAULT_TY
         await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=alert_text, parse_mode="Markdown")
         await update.message.reply_text("عذراً، تم رصد مخالفة في المحتوى المرسل وتم إبلاغ الإدارة.")
     else:
-        await update.message.reply_text("✅ تم استلام المقطع بنجاح، جاري معالجته...")
+            else:
+            else:
+        await update.message.reply_text("✅ تم استلام المقطع بنجاح، جاري ترجمة أو دبلجة المقطع...")
+
+
 
 
 def main():
